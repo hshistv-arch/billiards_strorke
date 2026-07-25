@@ -1,5 +1,5 @@
 import { armIndices, LANDMARK } from "./landmarkIndices";
-import { clamp, dist, mean, principalAxis, scoreLabel } from "./mathUtils";
+import { clamp, dist, mean, perpendicularDistances, principalAxis, scoreLabel } from "./mathUtils";
 import type { FrameLandmarks, Handedness, MetricResult, Point2D, StrokeAnalysisResult, ViewAngle } from "./types";
 
 function spatialStd(points: Point2D[]): number {
@@ -47,6 +47,28 @@ const COPY = {
   },
 } as const;
 
+// Exported so the UI can rescore the wrist-straightness card against a
+// manually-edited ideal line, reusing the exact same formula/copy as the
+// automatic fit.
+export function scoreWristStraightness(
+  wristPath: Point2D[],
+  line: [Point2D, Point2D],
+  scale: number,
+  viewAngle: ViewAngle
+): MetricResult {
+  const copy = COPY[viewAngle].wrist;
+  const rmsPerp = Math.sqrt(mean(perpendicularDistances(wristPath, line).map((d) => d * d)));
+  const ratio = rmsPerp / scale;
+  const score = clamp(100 - ratio * 300, 0, 100);
+  return {
+    key: "straightness",
+    label: copy.label,
+    score: Math.round(score),
+    isGood: score >= 70,
+    advice: `[${scoreLabel(score)}] ${score >= 70 ? copy.good : copy.bad}`,
+  };
+}
+
 export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness, viewAngle: ViewAngle): StrokeAnalysisResult | null {
   if (frames.length < 5) return null;
 
@@ -77,19 +99,6 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness, viewAn
 
   // 2. Wrist path straightness — the cueing hand should travel in a straight line.
   const { centroid, direction } = principalAxis(wristPoints);
-  const normal = { x: -direction.y, y: direction.x };
-  const perpDists = wristPoints.map((p) => Math.abs((p.x - centroid.x) * normal.x + (p.y - centroid.y) * normal.y));
-  const rmsPerp = Math.sqrt(mean(perpDists.map((d) => d * d)));
-  const straightnessRatio = rmsPerp / scale;
-  const straightnessScore = clamp(100 - straightnessRatio * 300, 0, 100);
-  metrics.push({
-    key: "straightness",
-    label: copy.wrist.label,
-    score: Math.round(straightnessScore),
-    isGood: straightnessScore >= 70,
-    advice: straightnessScore >= 70 ? copy.wrist.good : copy.wrist.bad,
-  });
-
   const projected = wristPoints.map((p) => (p.x - centroid.x) * direction.x + (p.y - centroid.y) * direction.y);
   const minProj = Math.min(...projected);
   const maxProj = Math.max(...projected);
@@ -97,6 +106,8 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness, viewAn
     { x: centroid.x + direction.x * minProj, y: centroid.y + direction.y * minProj },
     { x: centroid.x + direction.x * maxProj, y: centroid.y + direction.y * maxProj },
   ];
+  const straightnessMetric = scoreWristStraightness(wristPoints, fittedLine, scale, viewAngle);
+  metrics.push(straightnessMetric);
 
   // 3. Head / stance stability.
   const headRatio = spatialStd(nosePoints) / scale;
@@ -138,12 +149,16 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness, viewAn
         : "スイングの途中で速度の乱れ（迷い・ブレ）が見られます。バックスイングで軽く一時停止し、そこから一定になめらかに加速する意識を持ちましょう。",
   });
 
-  const overallScore = Math.round(mean(metrics.map((m) => m.score)));
+  const namedMetrics = metrics.map((m) =>
+    m.key === "straightness" ? m : { ...m, advice: `[${scoreLabel(m.score)}] ${m.advice}` }
+  );
+  const overallScore = Math.round(mean(namedMetrics.map((m) => m.score)));
 
   return {
     overallScore,
-    metrics: metrics.map((m) => ({ ...m, advice: `[${scoreLabel(m.score)}] ${m.advice}` })),
+    metrics: namedMetrics,
     wristPath: wristPoints,
     fittedLine,
+    scale,
   };
 }

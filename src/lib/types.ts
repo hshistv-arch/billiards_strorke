@@ -24,6 +24,7 @@ export interface StrokeAnalysisResult {
   metrics: MetricResult[];
   wristPath: Point2D[];
   fittedLine: [Point2D, Point2D] | null;
+  scale: number;
 }
 
 export interface CueBallFrame {
@@ -37,6 +38,7 @@ export interface CueBallFrame {
 export interface CueBallAnalysisResult {
   metrics: MetricResult[];
   cuePath: Point2D[];
+  prePath: Point2D[];
   fittedLine: [Point2D, Point2D] | null;
   ballPosition: Point2D;
   contactIndex: number;

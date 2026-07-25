@@ -2,10 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
-import { analyzeCueBall } from "./lib/analyzeCueBall";
-import { analyzeStroke } from "./lib/analyzeStroke";
+import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
+import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
+import { armIndices } from "./lib/landmarkIndices";
 import { trackCueBall } from "./lib/cueBallTrack";
-import { drawArmOnly, drawCueBall, drawLineHandles, drawPose, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
+import {
+  drawArmOnly,
+  drawCueBall,
+  drawLineHandles,
+  drawPose,
+  drawSeedMarker,
+  drawTimeMarker,
+  drawTrackOverlay,
+} from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
 
@@ -289,6 +298,22 @@ function App() {
   const displayedWristLine = wristLineOverride ?? analysis?.fittedLine ?? null;
   const displayedCueLine = cueLineOverride ?? cueBallAnalysis?.fittedLine ?? null;
 
+  // When the ideal line is manually edited, rescore against the edited line instead
+  // of the auto-fit one, so the score card always matches what's drawn on screen.
+  const effectiveAnalysis = useMemo(() => {
+    if (!analysis || !wristLineOverride) return analysis;
+    const updated = scoreWristStraightness(analysis.wristPath, wristLineOverride, analysis.scale, viewAngle);
+    const metrics = analysis.metrics.map((m) => (m.key === "straightness" ? updated : m));
+    const overallScore = Math.round(metrics.reduce((s, m) => s + m.score, 0) / metrics.length);
+    return { ...analysis, metrics, overallScore };
+  }, [analysis, wristLineOverride, viewAngle]);
+
+  const effectiveCueBallAnalysis = useMemo(() => {
+    if (!cueBallAnalysis || !cueLineOverride) return cueBallAnalysis;
+    const metrics = scoreCueMetrics(cueBallAnalysis.prePath, cueLineOverride, cueBallAnalysis.ballPosition);
+    return { ...cueBallAnalysis, metrics };
+  }, [cueBallAnalysis, cueLineOverride]);
+
   // A fresh analysis (new trim/hand/angle/tracking run) invalidates any manual line edit.
   useEffect(() => {
     setWristLineOverride(null);
@@ -315,32 +340,32 @@ function App() {
         else drawPose(ctx, frame.landmarks);
       }
       if (showGuideLines && analysis) {
-        drawTrackOverlay(
-          ctx,
-          analysis.wristPath,
-          displayedWristLine,
-          canvas.width,
-          canvas.height,
-          "rgba(255, 213, 74, 0.55)",
-          "#F472B6"
-        );
+        drawTrackOverlay(ctx, analysis.wristPath, displayedWristLine, canvas.width, canvas.height, "255, 213, 74", "#F472B6");
+        if (frame) {
+          const wristIdx = armIndices(hand).wrist;
+          const elapsed = frame.timeMs / 1000 - trimStart;
+          drawTimeMarker(
+            ctx,
+            frame.landmarks[wristIdx],
+            `${elapsed.toFixed(2)}s`,
+            canvas.width,
+            canvas.height,
+            "#FFD54A"
+          );
+        }
       }
+      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
       if (showGuideLines && cueBallAnalysis) {
-        drawTrackOverlay(
-          ctx,
-          cueBallAnalysis.cuePath,
-          displayedCueLine,
-          canvas.width,
-          canvas.height,
-          "rgba(56, 189, 248, 0.55)",
-          "#F472B6"
-        );
+        drawTrackOverlay(ctx, cueBallAnalysis.cuePath, displayedCueLine, canvas.width, canvas.height, "56, 189, 248", "#F472B6");
+        if (cbFrame) {
+          const elapsed = cbFrame.timeMs / 1000 - trimStart;
+          drawTimeMarker(ctx, cbFrame.cueTip, `${elapsed.toFixed(2)}s`, canvas.width, canvas.height, "#38BDF8");
+        }
       }
       if (lineEditMode) {
         if (displayedWristLine) drawLineHandles(ctx, displayedWristLine, canvas.width, canvas.height, "#F472B6");
         if (displayedCueLine) drawLineHandles(ctx, displayedCueLine, canvas.width, canvas.height, "#F472B6");
       }
-      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
       if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
         drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, canvas.width, canvas.height);
       }
@@ -364,6 +389,7 @@ function App() {
     lineEditMode,
     displayedWristLine,
     displayedCueLine,
+    trimStart,
   ]);
 
   function resetCueBall() {
@@ -643,14 +669,14 @@ function App() {
                 </label>
                 {analysis && (
                   <p className="hint legend">
-                    <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道
+                    <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道（薄い＝早い、濃い＝遅い）
                     <span className="legend-swatch" style={{ background: "#F472B6" }} /> 理想の直線
                     {cueBallAnalysis && (
                       <>
                         <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー先端の軌道
                       </>
                     )}
-                    ・ピンチ / ホイールで動画をズームできます
+                    ・丸いマーカーの秒数が現在の再生位置のタイミングです・ピンチ / ホイールで動画をズームできます
                   </p>
                 )}
                 {(displayedWristLine || displayedCueLine) && (
@@ -678,7 +704,7 @@ function App() {
                 )}
                 {lineEditMode && (
                   <p className="hint">
-                    ピンクのハンドル（●）をドラッグしてラインを調整できます。このラインは表示用の目安で、スコアには影響しません。
+                    ピンクのハンドル（●）をドラッグしてラインを調整できます。編集すると「直線性」「芯を捉えているか」のスコアもこのラインを基準に再計算されます。
                   </p>
                 )}
 
@@ -716,10 +742,10 @@ function App() {
             {error && <p className="error">{error}</p>}
           </div>
 
-          {analysis && (
+          {effectiveAnalysis && (
             <div className="results-panel">
               <div className="overall-score">
-                <div className="overall-score-ring">{analysis.overallScore}</div>
+                <div className="overall-score-ring">{effectiveAnalysis.overallScore}</div>
                 <div>
                   <h2>総合スコア</h2>
                   <p className="hint">4つの観点からストロークを自動採点しています。</p>
@@ -727,7 +753,7 @@ function App() {
               </div>
 
               <div className="metrics-grid">
-                {analysis.metrics.map((m) => (
+                {effectiveAnalysis.metrics.map((m) => (
                   <ScoreCard key={m.key} metric={m} />
                 ))}
               </div>
@@ -736,13 +762,13 @@ function App() {
                 <div>
                   <h3>手首の軌道</h3>
                   <p className="hint">
-                    点が実際の手首の動き、線が理想の直線です。点が線に近いほどまっすぐなストロークです。
+                    点が薄い→濃いの順で時間経過を表します。動画上のマーカーの秒数が、今の再生位置に対応するタイミングです。
                   </p>
                 </div>
-                <PathPlot points={analysis.wristPath} line={analysis.fittedLine} />
+                <PathPlot points={effectiveAnalysis.wristPath} line={displayedWristLine} />
               </div>
 
-              {cueBallAnalysis && (
+              {effectiveCueBallAnalysis && (
                 <div className="cueball-results">
                   <h3>詳細解析（キュー・ボール, β）</h3>
                   {avgConfidence < 0.4 && (
@@ -751,16 +777,16 @@ function App() {
                     </p>
                   )}
                   <div className="metrics-grid">
-                    {cueBallAnalysis.metrics.map((m) => (
+                    {effectiveCueBallAnalysis.metrics.map((m) => (
                       <ScoreCard key={m.key} metric={m} />
                     ))}
                   </div>
                   <div className="path-section">
                     <div>
                       <h3>キュー先端の軌道（実測）</h3>
-                      <p className="hint">赤丸がボール、青点がキュー先端の追跡結果です。</p>
+                      <p className="hint">赤丸がボール、点は薄い→濃いの順で時間経過を表すキュー先端の軌道です。</p>
                     </div>
-                    <PathPlot points={cueBallAnalysis.cuePath} line={cueBallAnalysis.fittedLine} />
+                    <PathPlot points={effectiveCueBallAnalysis.cuePath} line={displayedCueLine} />
                   </div>
                 </div>
               )}

@@ -72,18 +72,21 @@ export function drawCueBall(ctx: CanvasRenderingContext2D, ball: Point2D, cueTip
   ctx.setLineDash([]);
 }
 
+// pathColorRgb is an "R, G, B" triplet (no rgba() wrapper) so per-point alpha/size
+// can be varied to show progression through time — dim/small near the start of the
+// analyzed range, bright/large near the end.
 export function drawTrackOverlay(
   ctx: CanvasRenderingContext2D,
   path: Point2D[],
   idealLine: [Point2D, Point2D] | null,
   width: number,
   height: number,
-  pathColor: string,
+  pathColorRgb: string,
   lineColor: string
 ) {
   if (path.length >= 2) {
-    ctx.strokeStyle = pathColor;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(${pathColorRgb}, 0.3)`;
+    ctx.lineWidth = 1.5;
     ctx.lineJoin = "round";
     ctx.beginPath();
     path.forEach((p, i) => {
@@ -93,6 +96,14 @@ export function drawTrackOverlay(
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
+
+    path.forEach((p, i) => {
+      const t = path.length > 1 ? i / (path.length - 1) : 1;
+      ctx.fillStyle = `rgba(${pathColorRgb}, ${0.3 + t * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(p.x * width, p.y * height, 2 + t * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
   }
 
   if (idealLine) {
@@ -136,6 +147,51 @@ export function drawLineHandles(
     ctx.arc(x, y, 9, 0, Math.PI * 2);
     ctx.stroke();
   }
+}
+
+// Highlights where "now" (the current playback time) sits along a drawn trajectory,
+// with a small elapsed-time label so a specific point can be tied to a specific moment.
+export function drawTimeMarker(
+  ctx: CanvasRenderingContext2D,
+  point: Point2D,
+  label: string,
+  width: number,
+  height: number,
+  color: string
+) {
+  const x = point.x * width;
+  const y = point.y * height;
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 11, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.font = "600 12px system-ui, sans-serif";
+  const padX = 6;
+  const textWidth = ctx.measureText(label).width;
+  const boxW = textWidth + padX * 2;
+  const boxH = 18;
+  const boxX = Math.min(Math.max(x - boxW / 2, 2), width - boxW - 2);
+  const boxY = y - 11 - boxH - 4;
+
+  ctx.fillStyle = "rgba(15, 23, 20, 0.85)";
+  ctx.beginPath();
+  ctx.roundRect(boxX, boxY, boxW, boxH, 5);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, boxX + boxW / 2, boxY + boxH / 2 + 1);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 export function drawSeedMarker(ctx: CanvasRenderingContext2D, point: Point2D, color: string, width: number, height: number) {
