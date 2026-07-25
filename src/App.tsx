@@ -5,6 +5,7 @@ import { PathPlot } from "./components/PathPlot";
 import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
 import { armIndices } from "./lib/landmarkIndices";
+import { lineLength } from "./lib/mathUtils";
 import { trackCueBall } from "./lib/cueBallTrack";
 import {
   drawArmOnly,
@@ -314,6 +315,17 @@ function App() {
     return { ...cueBallAnalysis, metrics };
   }, [cueBallAnalysis, cueLineOverride]);
 
+  // Elapsed-time labels (seconds since the start of the scored range) paired 1:1 with
+  // analysis.wristPath / cueBallAnalysis.cuePath, plus the normalization scale each
+  // trajectory's deviation-from-line coloring should use (matches the scoring formula).
+  const wristTimes = useMemo(
+    () => trimmedFrames.map((f) => f.timeMs / 1000 - trimStart),
+    [trimmedFrames, trimStart]
+  );
+  const cueTimes = useMemo(() => cueBallFrames.map((f) => f.timeMs / 1000 - trimStart), [cueBallFrames, trimStart]);
+  const wristNormalizeBy = analysis?.scale ?? 0.2;
+  const cueNormalizeBy = displayedCueLine ? lineLength(displayedCueLine) : 1;
+
   // A fresh analysis (new trim/hand/angle/tracking run) invalidates any manual line edit.
   useEffect(() => {
     setWristLineOverride(null);
@@ -340,7 +352,17 @@ function App() {
         else drawPose(ctx, frame.landmarks);
       }
       if (showGuideLines && analysis) {
-        drawTrackOverlay(ctx, analysis.wristPath, displayedWristLine, canvas.width, canvas.height, "255, 213, 74", "#F472B6");
+        drawTrackOverlay(
+          ctx,
+          analysis.wristPath,
+          wristTimes,
+          displayedWristLine,
+          canvas.width,
+          canvas.height,
+          "255, 213, 74",
+          "#F472B6",
+          wristNormalizeBy
+        );
         if (frame) {
           const wristIdx = armIndices(hand).wrist;
           const elapsed = frame.timeMs / 1000 - trimStart;
@@ -356,7 +378,17 @@ function App() {
       }
       const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
       if (showGuideLines && cueBallAnalysis) {
-        drawTrackOverlay(ctx, cueBallAnalysis.cuePath, displayedCueLine, canvas.width, canvas.height, "56, 189, 248", "#F472B6");
+        drawTrackOverlay(
+          ctx,
+          cueBallAnalysis.cuePath,
+          cueTimes,
+          displayedCueLine,
+          canvas.width,
+          canvas.height,
+          "56, 189, 248",
+          "#F472B6",
+          cueNormalizeBy
+        );
         if (cbFrame) {
           const elapsed = cbFrame.timeMs / 1000 - trimStart;
           drawTimeMarker(ctx, cbFrame.cueTip, `${elapsed.toFixed(2)}s`, canvas.width, canvas.height, "#38BDF8");
@@ -390,6 +422,10 @@ function App() {
     displayedWristLine,
     displayedCueLine,
     trimStart,
+    wristTimes,
+    cueTimes,
+    wristNormalizeBy,
+    cueNormalizeBy,
   ]);
 
   function resetCueBall() {
@@ -676,7 +712,13 @@ function App() {
                         <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー先端の軌道
                       </>
                     )}
-                    ・丸いマーカーの秒数が現在の再生位置のタイミングです・ピンチ / ホイールで動画をズームできます
+                  </p>
+                )}
+                {analysis && (
+                  <p className="hint legend">
+                    軌道上の小さな数字は経過秒数、大きい丸のマーカーは現在の再生位置です。軌道から理想ラインへの短い線は
+                    <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />緑＝ズレ小さい〜
+                    <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />赤＝ズレ大きい を表します。ピンチ / ホイールで動画をズームできます。
                   </p>
                 )}
                 {(displayedWristLine || displayedCueLine) && (
