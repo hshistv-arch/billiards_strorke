@@ -88,6 +88,13 @@
   border-radius: 12px;
   overflow: hidden;
   background: #000;
+  touch-action: none;
+}
+
+.zoom-wrapper {
+  position: relative;
+  width: 100%;
+  transform-origin: 50% 50%;
 }
 
 .video-stage video {
@@ -122,6 +129,56 @@
   font-weight: 600;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.zoom-controls {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.zoom-controls button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(15, 23, 20, 0.75);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-controls button:hover {
+  background: rgba(15, 23, 20, 0.9);
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.hint.legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 4px;
 }
 
 .controls {

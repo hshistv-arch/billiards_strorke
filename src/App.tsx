@@ -5,12 +5,33 @@ import { PathPlot } from "./components/PathPlot";
 import { analyzeCueBall } from "./lib/analyzeCueBall";
 import { analyzeStroke } from "./lib/analyzeStroke";
 import { trackCueBall } from "./lib/cueBallTrack";
-import { drawCueBall, drawPose, drawSeedMarker } from "./lib/drawLandmarks";
+import { drawCueBall, drawPose, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
 type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "tracking" | "done" | "error";
+type ZoomState = { scale: number; x: number; y: number };
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+
+function clampZoomState(z: ZoomState, containerW: number, containerH: number): ZoomState {
+  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z.scale));
+  const maxX = (containerW * (scale - 1)) / 2;
+  const maxY = (containerH * (scale - 1)) / 2;
+  return {
+    scale,
+    x: Math.min(maxX, Math.max(-maxX, z.x)),
+    y: Math.min(maxY, Math.max(-maxY, z.y)),
+  };
+}
+
+function touchDistance(touches: React.TouchList): number {
+  const a = touches[0];
+  const b = touches[1];
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
 
 function nearestByTime<T extends { timeMs: number }>(items: T[], timeMs: number): T | null {
   if (items.length === 0) return null;
@@ -46,11 +67,86 @@ function App() {
   const [cbProgress, setCbProgress] = useState(0);
   const [cbError, setCbError] = useState<string | null>(null);
 
+  const [showGuideLines, setShowGuideLines] = useState(true);
+  const [zoom, setZoom] = useState<ZoomState>({ scale: 1, x: 0, y: 0 });
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const dragStateRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const pinchStateRef = useRef<{ startDist: number; startScale: number } | null>(null);
+
+  function updateZoom(updater: (z: ZoomState) => ZoomState) {
+    setZoom((z) => {
+      const next = updater(z);
+      const el = stageRef.current;
+      const w = el?.clientWidth ?? 1;
+      const h = el?.clientHeight ?? 1;
+      return clampZoomState(next, w, h);
+    });
+  }
+
+  function resetZoom() {
+    setZoom({ scale: 1, x: 0, y: 0 });
+  }
+
+  function handleWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    updateZoom((z) => ({ ...z, scale: z.scale * factor }));
+  }
+
+  function seedingActive() {
+    return cbStage === "seed-ball" || cbStage === "seed-cue";
+  }
+
+  function handleTouchStart(e: React.TouchEvent) {
+    if (e.touches.length === 2) {
+      pinchStateRef.current = { startDist: touchDistance(e.touches), startScale: zoom.scale };
+    } else if (e.touches.length === 1 && zoom.scale > 1 && !seedingActive()) {
+      dragStateRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, origX: zoom.x, origY: zoom.y };
+    }
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    if (e.touches.length === 2 && pinchStateRef.current) {
+      e.preventDefault();
+      const dist = touchDistance(e.touches);
+      const scale = pinchStateRef.current.startScale * (dist / pinchStateRef.current.startDist);
+      updateZoom((z) => ({ ...z, scale }));
+    } else if (e.touches.length === 1 && dragStateRef.current) {
+      e.preventDefault();
+      const drag = dragStateRef.current;
+      const dx = e.touches[0].clientX - drag.startX;
+      const dy = e.touches[0].clientY - drag.startY;
+      updateZoom((z) => ({ ...z, x: drag.origX + dx, y: drag.origY + dy }));
+    }
+  }
+
+  function handleTouchEnd() {
+    pinchStateRef.current = null;
+    dragStateRef.current = null;
+  }
+
+  function handleMouseDown(e: React.MouseEvent) {
+    if (zoom.scale <= 1 || seedingActive()) return;
+    dragStateRef.current = { startX: e.clientX, startY: e.clientY, origX: zoom.x, origY: zoom.y };
+  }
+
+  function handleMouseMove(e: React.MouseEvent) {
+    const drag = dragStateRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    updateZoom((z) => ({ ...z, x: drag.origX + dx, y: drag.origY + dy }));
+  }
+
+  function handleDragEnd() {
+    dragStateRef.current = null;
+  }
 
   function handleFile(file: File) {
     setError(null);
@@ -58,6 +154,7 @@ function App() {
     setProgress(0);
     setProcessedRange(null);
     resetCueBall();
+    resetZoom();
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
     setStage("loaded");
@@ -100,34 +197,6 @@ function App() {
     }
   }
 
-  // Continuously draw the skeleton + cue/ball overlay in sync with video playback/scrubbing.
-  useEffect(() => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    function loop() {
-      if (!video || !canvas || !ctx) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const frame = nearestByTime(frames, video.currentTime * 1000);
-      if (frame) {
-        drawPose(ctx, frame.landmarks);
-      }
-      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
-      if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
-        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, canvas.width, canvas.height);
-      }
-      if (cbStage === "seed-cue" && ballSeed) {
-        drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
-      }
-      rafRef.current = requestAnimationFrame(loop);
-    }
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [frames, cueBallFrames, cbStage, ballSeed]);
-
   const trimmedFrames = useMemo(
     () => frames.filter((f) => f.timeMs >= trimStart * 1000 && f.timeMs <= trimEnd * 1000),
     [frames, trimStart, trimEnd]
@@ -142,6 +211,56 @@ function App() {
     if (cbStage !== "done") return null;
     return analyzeCueBall(cueBallFrames);
   }, [cueBallFrames, cbStage]);
+
+  // Continuously draw the skeleton, guide lines, and cue/ball overlay in sync with video playback/scrubbing.
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    function loop() {
+      if (!video || !canvas || !ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const frame = nearestByTime(frames, video.currentTime * 1000);
+      if (frame) {
+        drawPose(ctx, frame.landmarks);
+      }
+      if (showGuideLines && analysis) {
+        drawTrackOverlay(
+          ctx,
+          analysis.wristPath,
+          analysis.fittedLine,
+          canvas.width,
+          canvas.height,
+          "rgba(255, 213, 74, 0.55)",
+          "#F472B6"
+        );
+      }
+      if (showGuideLines && cueBallAnalysis) {
+        drawTrackOverlay(
+          ctx,
+          cueBallAnalysis.cuePath,
+          cueBallAnalysis.fittedLine,
+          canvas.width,
+          canvas.height,
+          "rgba(56, 189, 248, 0.55)",
+          "#F472B6"
+        );
+      }
+      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
+      if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
+        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, canvas.width, canvas.height);
+      }
+      if (cbStage === "seed-cue" && ballSeed) {
+        drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    }
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [frames, cueBallFrames, cbStage, ballSeed, analysis, cueBallAnalysis, showGuideLines]);
 
   function resetCueBall() {
     setCbStage("idle");
@@ -202,6 +321,7 @@ function App() {
     setProcessedRange(null);
     setError(null);
     resetCueBall();
+    resetZoom();
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -276,24 +396,56 @@ function App() {
       {stage !== "idle" && (
         <div className="workspace">
           <div className="video-panel">
-            <div className="video-stage">
-              <video
-                ref={videoRef}
-                src={videoUrl ?? undefined}
-                controls
-                playsInline
-                onLoadedMetadata={onLoadedMetadata}
-              />
-              <canvas
-                ref={canvasRef}
-                className={`overlay ${cbStage === "seed-ball" || cbStage === "seed-cue" ? "overlay-clickable" : ""}`}
-                onClick={handleStageClick}
-              />
-              {(cbStage === "seed-ball" || cbStage === "seed-cue") && (
+            <div
+              className="video-stage"
+              ref={stageRef}
+              onWheel={handleWheel}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleDragEnd}
+              onMouseLeave={handleDragEnd}
+            >
+              <div
+                className="zoom-wrapper"
+                style={{
+                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                  cursor: zoom.scale > 1 && !seedingActive() ? "grab" : "default",
+                }}
+              >
+                <video
+                  ref={videoRef}
+                  src={videoUrl ?? undefined}
+                  controls
+                  playsInline
+                  onLoadedMetadata={onLoadedMetadata}
+                />
+                <canvas
+                  ref={canvasRef}
+                  className={`overlay ${seedingActive() ? "overlay-clickable" : ""}`}
+                  onClick={handleStageClick}
+                />
+              </div>
+              {seedingActive() && (
                 <div className="seed-banner">
                   {cbStage === "seed-ball" ? "① 手球（狙う球）の中心をタップ" : "② キューの先端をタップ"}
                 </div>
               )}
+              <div className="zoom-controls">
+                <button type="button" onClick={() => updateZoom((z) => ({ ...z, scale: z.scale * 1.4 }))}>
+                  ＋
+                </button>
+                <button type="button" onClick={() => updateZoom((z) => ({ ...z, scale: z.scale / 1.4 }))}>
+                  −
+                </button>
+                {zoom.scale > 1 && (
+                  <button type="button" onClick={resetZoom}>
+                    ⟲
+                  </button>
+                )}
+              </div>
             </div>
 
             {stage === "loaded" && (
@@ -370,6 +522,27 @@ function App() {
                 <p className="hint">
                   スライダーで、実際に打つ「ストローク動作」の区間だけに絞ると、より正確な評価になります。
                 </p>
+
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={showGuideLines}
+                    onChange={(e) => setShowGuideLines(e.target.checked)}
+                  />
+                  動画上に軌道・理想ラインを表示
+                </label>
+                {analysis && (
+                  <p className="hint legend">
+                    <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道
+                    <span className="legend-swatch" style={{ background: "#F472B6" }} /> 理想の直線
+                    {cueBallAnalysis && (
+                      <>
+                        <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー先端の軌道
+                      </>
+                    )}
+                    ・ピンチ / ホイールで動画をズームできます
+                  </p>
+                )}
 
                 <div className="cueball-controls">
                   {cbStage === "idle" && (

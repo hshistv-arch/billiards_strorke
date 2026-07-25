@@ -41,6 +41,50 @@ export function drawCueBall(ctx: CanvasRenderingContext2D, ball: Point2D, cueTip
   ctx.setLineDash([]);
 }
 
+export function drawTrackOverlay(
+  ctx: CanvasRenderingContext2D,
+  path: Point2D[],
+  idealLine: [Point2D, Point2D] | null,
+  width: number,
+  height: number,
+  pathColor: string,
+  lineColor: string
+) {
+  if (path.length >= 2) {
+    ctx.strokeStyle = pathColor;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    path.forEach((p, i) => {
+      const x = p.x * width;
+      const y = p.y * height;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  if (idealLine) {
+    const [a, b] = idealLine;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const ext = 0.08;
+    const ax = (a.x - dx * ext) * width;
+    const ay = (a.y - dy * ext) * height;
+    const bx = (b.x + dx * ext) * width;
+    const by = (b.y + dy * ext) * height;
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([10, 7]);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
 export function drawSeedMarker(ctx: CanvasRenderingContext2D, point: Point2D, color: string, width: number, height: number) {
   const x = point.x * width;
   const y = point.y * height;

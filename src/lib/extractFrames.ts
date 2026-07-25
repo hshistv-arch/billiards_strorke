@@ -1,4 +1,4 @@
-import { getPoseLandmarker } from "./poseLandmarker";
+import { getPoseLandmarker, reserveTimestamp } from "./poseLandmarker";
 import type { FrameLandmarks } from "./types";
 
 const WORK_MAX_DIM = 640;
@@ -51,6 +51,10 @@ async function extractFramesFast(
 
   await seekTo(video, trimStart);
   video.playbackRate = PLAYBACK_RATE;
+  // Muting avoids autoplay-permission rejections on browsers that block programmatic
+  // play() with sound once we're a few microtasks removed from the click that started this.
+  const wasMuted = video.muted;
+  video.muted = true;
 
   return new Promise((resolve, reject) => {
     let lastMs = -Infinity;
@@ -61,6 +65,7 @@ async function extractFramesFast(
       settled = true;
       video.pause();
       video.playbackRate = 1;
+      video.muted = wasMuted;
       video.removeEventListener("ended", finish);
       onProgress(1);
       resolve(frames);
@@ -77,7 +82,7 @@ async function extractFramesFast(
       if (tMs - lastMs >= minGapMs) {
         lastMs = tMs;
         ctx.drawImage(video, 0, 0, w, h);
-        const result = landmarker.detectForVideo(canvas, Math.round(tMs));
+        const result = landmarker.detectForVideo(canvas, reserveTimestamp(tMs));
         const landmarks = result.landmarks?.[0];
         if (landmarks && landmarks.length > 0) {
           frames.push({ timeMs: tMs, landmarks: landmarks.map((p) => ({ x: p.x, y: p.y })) });
@@ -88,7 +93,10 @@ async function extractFramesFast(
     }
 
     video.requestVideoFrameCallback(onFrame);
-    video.play().catch(reject);
+    video.play().catch((e) => {
+      video.muted = wasMuted;
+      reject(e);
+    });
 
     // Safety net in case 'ended'/mediaTime never reaches trimEnd (e.g. trimEnd ~= duration).
     video.addEventListener("ended", finish, { once: true });
@@ -115,7 +123,7 @@ async function extractFramesBySeek(
     const t = Math.min(trimEnd - 0.001, trimStart + i * step);
     await seekTo(video, t);
     ctx.drawImage(video, 0, 0, w, h);
-    const result = landmarker.detectForVideo(canvas, Math.round(t * 1000));
+    const result = landmarker.detectForVideo(canvas, reserveTimestamp(t * 1000));
     const landmarks = result.landmarks?.[0];
     if (landmarks && landmarks.length > 0) {
       frames.push({ timeMs: t * 1000, landmarks: landmarks.map((p) => ({ x: p.x, y: p.y })) });
