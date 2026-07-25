@@ -7,7 +7,7 @@ import { analyzeStroke } from "./lib/analyzeStroke";
 import { trackCueBall } from "./lib/cueBallTrack";
 import { drawCueBall, drawPose, drawSeedMarker } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
-import type { CueBallFrame, FrameLandmarks, Handedness, Point2D } from "./lib/types";
+import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
 type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "tracking" | "done" | "error";
@@ -34,8 +34,10 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [frames, setFrames] = useState<FrameLandmarks[]>([]);
   const [hand, setHand] = useState<Handedness>("right");
+  const [viewAngle, setViewAngle] = useState<ViewAngle>("side");
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
+  const [processedRange, setProcessedRange] = useState<{ start: number; end: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [cbStage, setCbStage] = useState<CueBallStage>("idle");
@@ -54,6 +56,7 @@ function App() {
     setError(null);
     setFrames([]);
     setProgress(0);
+    setProcessedRange(null);
     resetCueBall();
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
@@ -78,16 +81,18 @@ function App() {
     if (!video) return;
     setStage("processing");
     setError(null);
+    const range = { start: trimStart, end: trimEnd };
     try {
-      const result = await extractFrames(video, setProgress);
+      const result = await extractFrames(video, range.start, range.end, setProgress);
       if (result.length < 5) {
         setError("人物の姿勢をうまく検出できませんでした。人物全体が映る動画でお試しください。");
         setStage("loaded");
         return;
       }
       setFrames(result);
+      setProcessedRange(range);
       setStage("ready");
-      video.currentTime = 0;
+      video.currentTime = range.start;
     } catch (e) {
       console.error(e);
       setError("解析中にエラーが発生しました。別の動画でお試しください。");
@@ -130,8 +135,8 @@ function App() {
 
   const analysis = useMemo(() => {
     if (stage !== "ready" || trimmedFrames.length < 5) return null;
-    return analyzeStroke(trimmedFrames, hand);
-  }, [trimmedFrames, hand, stage]);
+    return analyzeStroke(trimmedFrames, hand, viewAngle);
+  }, [trimmedFrames, hand, viewAngle, stage]);
 
   const cueBallAnalysis = useMemo(() => {
     if (cbStage !== "done") return null;
@@ -194,6 +199,7 @@ function App() {
     setVideoUrl(null);
     setFrames([]);
     setProgress(0);
+    setProcessedRange(null);
     setError(null);
     resetCueBall();
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -203,6 +209,25 @@ function App() {
     cueBallFrames.length > 0
       ? cueBallFrames.reduce((s, f) => s + Math.min(f.ballConfidence, f.cueConfidence), 0) / cueBallFrames.length
       : 0;
+
+  const handAngleSelectors = (
+    <>
+      <label className="hand-select">
+        利き手:
+        <select value={hand} onChange={(e) => setHand(e.target.value as Handedness)}>
+          <option value="right">右</option>
+          <option value="left">左</option>
+        </select>
+      </label>
+      <label className="hand-select">
+        撮影アングル:
+        <select value={viewAngle} onChange={(e) => setViewAngle(e.target.value as ViewAngle)}>
+          <option value="side">真横から</option>
+          <option value="front">正面から</option>
+        </select>
+      </label>
+    </>
+  );
 
   return (
     <div className="app">
@@ -243,7 +268,7 @@ function App() {
             }}
           />
           <p className="hint">
-            構えからフォロースルーまで、体全体が映った動画をアップロードしてください（真横からの撮影推奨）。
+            構えからフォロースルーまで、体全体が映った動画をアップロードしてください（真横・正面どちらの撮影にも対応しています）。
           </p>
         </div>
       )}
@@ -273,13 +298,32 @@ function App() {
 
             {stage === "loaded" && (
               <div className="controls">
-                <label className="hand-select">
-                  利き手:
-                  <select value={hand} onChange={(e) => setHand(e.target.value as Handedness)}>
-                    <option value="right">右</option>
-                    <option value="left">左</option>
-                  </select>
-                </label>
+                {handAngleSelectors}
+                <div className="trim-row">
+                  <span>解析範囲:</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration}
+                    step={0.05}
+                    value={trimStart}
+                    onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.1))}
+                  />
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration}
+                    step={0.05}
+                    value={trimEnd}
+                    onChange={(e) => setTrimEnd(Math.max(Number(e.target.value), trimStart + 0.1))}
+                  />
+                  <span className="trim-label">
+                    {trimStart.toFixed(1)}s - {trimEnd.toFixed(1)}s
+                  </span>
+                </div>
+                <p className="hint">
+                  実際にストロークしている部分だけに絞るほど解析が速く終わります（動画全体を解析すると時間がかかります）。
+                </p>
                 <button type="button" className="primary-btn" onClick={startProcessing}>
                   解析を開始する
                 </button>
@@ -298,29 +342,23 @@ function App() {
               </div>
             )}
 
-            {stage === "ready" && (
+            {stage === "ready" && processedRange && (
               <div className="controls">
-                <label className="hand-select">
-                  利き手:
-                  <select value={hand} onChange={(e) => setHand(e.target.value as Handedness)}>
-                    <option value="right">右</option>
-                    <option value="left">左</option>
-                  </select>
-                </label>
+                {handAngleSelectors}
                 <div className="trim-row">
                   <span>評価範囲:</span>
                   <input
                     type="range"
-                    min={0}
-                    max={duration}
+                    min={processedRange.start}
+                    max={processedRange.end}
                     step={0.05}
                     value={trimStart}
                     onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.1))}
                   />
                   <input
                     type="range"
-                    min={0}
-                    max={duration}
+                    min={processedRange.start}
+                    max={processedRange.end}
                     step={0.05}
                     value={trimEnd}
                     onChange={(e) => setTrimEnd(Math.max(Number(e.target.value), trimStart + 0.1))}

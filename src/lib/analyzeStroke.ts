@@ -1,6 +1,6 @@
 import { armIndices, LANDMARK } from "./landmarkIndices";
 import { clamp, dist, mean, principalAxis, scoreLabel } from "./mathUtils";
-import type { FrameLandmarks, Handedness, MetricResult, Point2D, StrokeAnalysisResult } from "./types";
+import type { FrameLandmarks, Handedness, MetricResult, Point2D, StrokeAnalysisResult, ViewAngle } from "./types";
 
 function spatialStd(points: Point2D[]): number {
   const mx = mean(points.map((p) => p.x));
@@ -10,9 +10,47 @@ function spatialStd(points: Point2D[]): number {
   return Math.sqrt(varX + varY);
 }
 
-export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness): StrokeAnalysisResult | null {
+const COPY = {
+  side: {
+    elbow: {
+      label: "肘の安定性",
+      good: "肘が支点として安定しており、良いピボットができています。",
+      bad: "ストローク中に肘の位置が動いています。肘を固定し、前腕だけを振り子のように動かす意識を持ちましょう。",
+    },
+    wrist: {
+      label: "手首軌道の直線性",
+      good: "手首（キュー）の軌道がまっすぐ出ています。",
+      bad: "手首の軌道が直線からずれています。グリップの力みを抜き、キューを真っ直ぐ引いて真っ直ぐ出すことを意識しましょう。",
+    },
+    head: {
+      label: "頭・上体の安定性",
+      good: "頭・上体がしっかり静止できています。",
+      bad: "打球時に頭や上体が動いています。狙いを定めたら最後まで頭を動かさず、目線を残す意識を持ちましょう。",
+    },
+  },
+  front: {
+    elbow: {
+      label: "肘の横ブレ（脇の締まり）",
+      good: "肘が体の近くで安定しており、脇が締まっています。",
+      bad: "ストローク中に肘が外側へ開いています。脇を締め、肘を体の近くに保ったまま振りましょう。",
+    },
+    wrist: {
+      label: "手首の左右ブレ（キューの直進性）",
+      good: "手首が左右にブレず、キューがまっすぐ出ています。",
+      bad: "手首が左右にブレています。ストローク中にキューが体の正面から逸れていないか、鏡や動画で確認しましょう。",
+    },
+    head: {
+      label: "頭・上体の安定性",
+      good: "頭・上体が左右にブレず安定しています。",
+      bad: "打球時に頭や上体が左右に動いています。狙いを定めたら最後まで頭を動かさず、目線を残す意識を持ちましょう。",
+    },
+  },
+} as const;
+
+export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness, viewAngle: ViewAngle): StrokeAnalysisResult | null {
   if (frames.length < 5) return null;
 
+  const copy = COPY[viewAngle];
   const { elbow, wrist } = armIndices(hand);
 
   const shoulderWidths = frames.map((f) =>
@@ -31,13 +69,10 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness): Strok
   const elbowScore = clamp(100 - elbowRatio * 150, 0, 100);
   metrics.push({
     key: "elbow",
-    label: "肘の安定性",
+    label: copy.elbow.label,
     score: Math.round(elbowScore),
     isGood: elbowScore >= 70,
-    advice:
-      elbowScore >= 70
-        ? "肘が支点として安定しており、良いピボットができています。"
-        : "ストローク中に肘の位置が動いています。肘を固定し、前腕だけを振り子のように動かす意識を持ちましょう。",
+    advice: elbowScore >= 70 ? copy.elbow.good : copy.elbow.bad,
   });
 
   // 2. Wrist path straightness — the cueing hand should travel in a straight line.
@@ -49,13 +84,10 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness): Strok
   const straightnessScore = clamp(100 - straightnessRatio * 300, 0, 100);
   metrics.push({
     key: "straightness",
-    label: "手首軌道の直線性",
+    label: copy.wrist.label,
     score: Math.round(straightnessScore),
     isGood: straightnessScore >= 70,
-    advice:
-      straightnessScore >= 70
-        ? "手首（キュー）の軌道がまっすぐ出ています。"
-        : "手首の軌道が直線からずれています。グリップの力みを抜き、キューを真っ直ぐ引いて真っ直ぐ出すことを意識しましょう。",
+    advice: straightnessScore >= 70 ? copy.wrist.good : copy.wrist.bad,
   });
 
   const projected = wristPoints.map((p) => (p.x - centroid.x) * direction.x + (p.y - centroid.y) * direction.y);
@@ -71,13 +103,10 @@ export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness): Strok
   const headScore = clamp(100 - headRatio * 250, 0, 100);
   metrics.push({
     key: "head",
-    label: "頭・上体の安定性",
+    label: copy.head.label,
     score: Math.round(headScore),
     isGood: headScore >= 70,
-    advice:
-      headScore >= 70
-        ? "頭・上体がしっかり静止できています。"
-        : "打球時に頭や上体が動いています。狙いを定めたら最後まで頭を動かさず、目線を残す意識を持ちましょう。",
+    advice: headScore >= 70 ? copy.head.good : copy.head.bad,
   });
 
   // 4. Tempo smoothness — count direction reversals along the swing axis.

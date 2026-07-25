@@ -9,6 +9,7 @@ export interface FrameLandmarks {
 }
 
 export type Handedness = "right" | "left";
+export type ViewAngle = "side" | "front";
 
 export interface MetricResult {
   key: string;
