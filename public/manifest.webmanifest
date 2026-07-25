@@ -1,0 +1,29 @@
+{
+  "name": "ビリヤード ストローク解析",
+  "short_name": "ストローク解析",
+  "description": "ビリヤードのストローク動画をAIが自動採点し、修正ポイントを教えてくれるアプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e2417",
+  "theme_color": "#1f7a4d",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
