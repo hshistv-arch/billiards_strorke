@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
+import { DeviationPlot } from "./components/DeviationPlot";
 import { HistoryList } from "./components/HistoryList";
 import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
@@ -9,6 +10,7 @@ import { trackCueBall } from "./lib/cueBallTrack";
 import { drawCueBall, drawLineHandles, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
 import { deleteResult, loadHistory, saveResult } from "./lib/history";
+import { lineLength } from "./lib/mathUtils";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, SavedResult, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
@@ -825,10 +827,18 @@ function App() {
                   </div>
                   <div className="path-section">
                     <div>
-                      <h3>キュー先端の軌道（実測）</h3>
-                      <p className="hint">赤丸がボール、点は薄い→濃いの順で時間経過を表すキュー先端の軌道です。</p>
+                      <h3>キュー先端と理想ラインのズレ</h3>
+                      <p className="hint legend">
+                        線の色でズレの大きさを表します：
+                        <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />ズレ小さい
+                        <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />ズレ大きい
+                      </p>
                     </div>
-                    <PathPlot points={effectiveCueBallAnalysis.cuePath} line={displayedCueLine} />
+                    <DeviationPlot
+                      points={effectiveCueBallAnalysis.prePath}
+                      line={displayedCueLine}
+                      normalizeBy={displayedCueLine ? lineLength(displayedCueLine) : 1}
+                    />
                   </div>
                 </div>
               )}

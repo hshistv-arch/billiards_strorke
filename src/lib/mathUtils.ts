@@ -65,6 +65,15 @@ export function lineLength(line: [Point2D, Point2D]): number {
   return Math.hypot(line[1].x - line[0].x, line[1].y - line[0].y) || 1e-6;
 }
 
+export function footOfPerpendicular(p: Point2D, line: [Point2D, Point2D]): Point2D {
+  const [a, b] = line;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy || 1e-9;
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
+
 export function fitLineThrough(points: Point2D[]): [Point2D, Point2D] {
   const { centroid, direction } = principalAxis(points);
   const projected = points.map((p) => (p.x - centroid.x) * direction.x + (p.y - centroid.y) * direction.y);
