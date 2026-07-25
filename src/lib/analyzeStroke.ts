@@ -1,13 +1,6 @@
 import { armIndices, LANDMARK } from "./landmarkIndices";
+import { clamp, dist, mean, principalAxis, scoreLabel } from "./mathUtils";
 import type { FrameLandmarks, Handedness, MetricResult, Point2D, StrokeAnalysisResult } from "./types";
-
-function dist(a: Point2D, b: Point2D): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function mean(values: number[]): number {
-  return values.reduce((s, v) => s + v, 0) / values.length;
-}
 
 function spatialStd(points: Point2D[]): number {
   const mx = mean(points.map((p) => p.x));
@@ -15,49 +8,6 @@ function spatialStd(points: Point2D[]): number {
   const varX = mean(points.map((p) => (p.x - mx) ** 2));
   const varY = mean(points.map((p) => (p.y - my) ** 2));
   return Math.sqrt(varX + varY);
-}
-
-// PCA on 2D points: returns unit direction of largest-variance axis and centroid.
-function principalAxis(points: Point2D[]): { centroid: Point2D; direction: Point2D } {
-  const cx = mean(points.map((p) => p.x));
-  const cy = mean(points.map((p) => p.y));
-  let sxx = 0;
-  let sxy = 0;
-  let syy = 0;
-  for (const p of points) {
-    const dx = p.x - cx;
-    const dy = p.y - cy;
-    sxx += dx * dx;
-    sxy += dx * dy;
-    syy += dy * dy;
-  }
-  sxx /= points.length;
-  sxy /= points.length;
-  syy /= points.length;
-
-  // Eigenvector of the largest eigenvalue for a 2x2 symmetric matrix.
-  const trace = sxx + syy;
-  const det = sxx * syy - sxy * sxy;
-  const lambda = trace / 2 + Math.sqrt(Math.max(0, (trace / 2) ** 2 - det));
-  let dx = lambda - syy;
-  let dy = sxy;
-  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
-    dx = 1;
-    dy = 0;
-  }
-  const len = Math.hypot(dx, dy) || 1;
-  return { centroid: { x: cx, y: cy }, direction: { x: dx / len, y: dy / len } };
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
-}
-
-function scoreLabel(score: number): string {
-  if (score >= 85) return "良好";
-  if (score >= 70) return "ほぼ良好";
-  if (score >= 50) return "要改善";
-  return "要修正";
 }
 
 export function analyzeStroke(frames: FrameLandmarks[], hand: Handedness): StrokeAnalysisResult | null {

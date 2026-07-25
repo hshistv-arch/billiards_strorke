@@ -1,7 +1,7 @@
 import { getPoseLandmarker } from "./poseLandmarker";
 import type { FrameLandmarks } from "./types";
 
-function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
+export function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
   return new Promise((resolve) => {
     const onSeeked = () => {
       video.removeEventListener("seeked", onSeeked);

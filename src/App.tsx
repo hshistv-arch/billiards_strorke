@@ -2,26 +2,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
+import { analyzeCueBall } from "./lib/analyzeCueBall";
 import { analyzeStroke } from "./lib/analyzeStroke";
-import { drawPose } from "./lib/drawLandmarks";
+import { trackCueBall } from "./lib/cueBallTrack";
+import { drawCueBall, drawPose, drawSeedMarker } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
-import type { FrameLandmarks, Handedness } from "./lib/types";
+import type { CueBallFrame, FrameLandmarks, Handedness, Point2D } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
+type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "tracking" | "done" | "error";
 
-function nearestFrame(frames: FrameLandmarks[], timeMs: number): FrameLandmarks | null {
-  if (frames.length === 0) return null;
+function nearestByTime<T extends { timeMs: number }>(items: T[], timeMs: number): T | null {
+  if (items.length === 0) return null;
   let lo = 0;
-  let hi = frames.length - 1;
+  let hi = items.length - 1;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (frames[mid].timeMs < timeMs) lo = mid + 1;
+    if (items[mid].timeMs < timeMs) lo = mid + 1;
     else hi = mid;
   }
-  if (lo > 0 && Math.abs(frames[lo - 1].timeMs - timeMs) < Math.abs(frames[lo].timeMs - timeMs)) {
-    return frames[lo - 1];
+  if (lo > 0 && Math.abs(items[lo - 1].timeMs - timeMs) < Math.abs(items[lo].timeMs - timeMs)) {
+    return items[lo - 1];
   }
-  return frames[lo];
+  return items[lo];
 }
 
 function App() {
@@ -35,6 +38,12 @@ function App() {
   const [trimEnd, setTrimEnd] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
+  const [cbStage, setCbStage] = useState<CueBallStage>("idle");
+  const [ballSeed, setBallSeed] = useState<Point2D | null>(null);
+  const [cueBallFrames, setCueBallFrames] = useState<CueBallFrame[]>([]);
+  const [cbProgress, setCbProgress] = useState(0);
+  const [cbError, setCbError] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
@@ -45,6 +54,7 @@ function App() {
     setError(null);
     setFrames([]);
     setProgress(0);
+    resetCueBall();
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
     setStage("loaded");
@@ -85,9 +95,8 @@ function App() {
     }
   }
 
-  // Continuously draw the skeleton overlay in sync with video playback/scrubbing.
+  // Continuously draw the skeleton + cue/ball overlay in sync with video playback/scrubbing.
   useEffect(() => {
-    if (frames.length === 0) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -96,15 +105,23 @@ function App() {
 
     function loop() {
       if (!video || !canvas || !ctx) return;
-      const frame = nearestFrame(frames, video.currentTime * 1000);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const frame = nearestByTime(frames, video.currentTime * 1000);
       if (frame) {
-        drawPose(ctx, frame.landmarks, canvas.width, canvas.height);
+        drawPose(ctx, frame.landmarks);
+      }
+      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
+      if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
+        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, canvas.width, canvas.height);
+      }
+      if (cbStage === "seed-cue" && ballSeed) {
+        drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
       }
       rafRef.current = requestAnimationFrame(loop);
     }
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [frames]);
+  }, [frames, cueBallFrames, cbStage, ballSeed]);
 
   const trimmedFrames = useMemo(
     () => frames.filter((f) => f.timeMs >= trimStart * 1000 && f.timeMs <= trimEnd * 1000),
@@ -116,14 +133,76 @@ function App() {
     return analyzeStroke(trimmedFrames, hand);
   }, [trimmedFrames, hand, stage]);
 
+  const cueBallAnalysis = useMemo(() => {
+    if (cbStage !== "done") return null;
+    return analyzeCueBall(cueBallFrames);
+  }, [cueBallFrames, cbStage]);
+
+  function resetCueBall() {
+    setCbStage("idle");
+    setBallSeed(null);
+    setCueBallFrames([]);
+    setCbProgress(0);
+    setCbError(null);
+  }
+
+  function startCueBallSeeding() {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    video.currentTime = trimStart;
+    setBallSeed(null);
+    setCbError(null);
+    setCbStage("seed-ball");
+  }
+
+  function handleStageClick(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (cbStage !== "seed-ball" && cbStage !== "seed-cue") return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const point: Point2D = {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+    };
+    if (cbStage === "seed-ball") {
+      setBallSeed(point);
+      setCbStage("seed-cue");
+    } else {
+      runCueBallTracking(point);
+    }
+  }
+
+  async function runCueBallTracking(cueSeedPoint: Point2D) {
+    const video = videoRef.current;
+    if (!video || !ballSeed) return;
+    setCbStage("tracking");
+    setCbProgress(0);
+    try {
+      const result = await trackCueBall(video, trimStart, trimEnd, ballSeed, cueSeedPoint, setCbProgress);
+      setCueBallFrames(result);
+      setCbStage("done");
+    } catch (e) {
+      console.error(e);
+      setCbError("キュー・ボールの追跡に失敗しました。ボールとキュー先端がはっきり映っている動画でお試しください。");
+      setCbStage("error");
+    }
+  }
+
   function reset() {
     setStage("idle");
     setVideoUrl(null);
     setFrames([]);
     setProgress(0);
     setError(null);
+    resetCueBall();
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
+
+  const avgConfidence =
+    cueBallFrames.length > 0
+      ? cueBallFrames.reduce((s, f) => s + Math.min(f.ballConfidence, f.cueConfidence), 0) / cueBallFrames.length
+      : 0;
 
   return (
     <div className="app">
@@ -180,7 +259,16 @@ function App() {
                 playsInline
                 onLoadedMetadata={onLoadedMetadata}
               />
-              <canvas ref={canvasRef} className="overlay" />
+              <canvas
+                ref={canvasRef}
+                className={`overlay ${cbStage === "seed-ball" || cbStage === "seed-cue" ? "overlay-clickable" : ""}`}
+                onClick={handleStageClick}
+              />
+              {(cbStage === "seed-ball" || cbStage === "seed-cue") && (
+                <div className="seed-banner">
+                  {cbStage === "seed-ball" ? "① 手球（狙う球）の中心をタップ" : "② キューの先端をタップ"}
+                </div>
+              )}
             </div>
 
             {stage === "loaded" && (
@@ -244,6 +332,32 @@ function App() {
                 <p className="hint">
                   スライダーで、実際に打つ「ストローク動作」の区間だけに絞ると、より正確な評価になります。
                 </p>
+
+                <div className="cueball-controls">
+                  {cbStage === "idle" && (
+                    <button type="button" className="ghost-btn wide" onClick={startCueBallSeeding}>
+                      🎯 詳細解析（β）: キュー・ボールを検出
+                    </button>
+                  )}
+                  {(cbStage === "seed-ball" || cbStage === "seed-cue") && (
+                    <p className="hint">動画の上でタップして位置を指定してください。</p>
+                  )}
+                  {cbStage === "tracking" && (
+                    <div className="progress-wrap">
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{ width: `${Math.round(cbProgress * 100)}%` }} />
+                      </div>
+                      <p>キュー・ボールを追跡しています… {Math.round(cbProgress * 100)}%</p>
+                    </div>
+                  )}
+                  {(cbStage === "done" || cbStage === "error") && (
+                    <button type="button" className="ghost-btn" onClick={resetCueBall}>
+                      詳細解析をやり直す
+                    </button>
+                  )}
+                  {cbError && <p className="error">{cbError}</p>}
+                </div>
+
                 <button type="button" className="ghost-btn" onClick={reset}>
                   別の動画を解析する
                 </button>
@@ -278,6 +392,29 @@ function App() {
                 </div>
                 <PathPlot points={analysis.wristPath} line={analysis.fittedLine} />
               </div>
+
+              {cueBallAnalysis && (
+                <div className="cueball-results">
+                  <h3>詳細解析（キュー・ボール, β）</h3>
+                  {avgConfidence < 0.4 && (
+                    <p className="hint warning">
+                      追跡の信頼度が低めです。照明やボールとキューの映り具合によって精度が変わります。参考程度にご覧ください。
+                    </p>
+                  )}
+                  <div className="metrics-grid">
+                    {cueBallAnalysis.metrics.map((m) => (
+                      <ScoreCard key={m.key} metric={m} />
+                    ))}
+                  </div>
+                  <div className="path-section">
+                    <div>
+                      <h3>キュー先端の軌道（実測）</h3>
+                      <p className="hint">赤丸がボール、青点がキュー先端の追跡結果です。</p>
+                    </div>
+                    <PathPlot points={cueBallAnalysis.cuePath} line={cueBallAnalysis.fittedLine} />
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

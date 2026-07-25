@@ -104,6 +104,26 @@
   pointer-events: none;
 }
 
+.video-stage .overlay.overlay-clickable {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.seed-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 20, 0.85);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .controls {
   margin-top: 16px;
   display: flex;
@@ -241,6 +261,30 @@
 .metrics-grid {
   display: grid;
   gap: 14px;
+}
+
+.cueball-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cueball-results {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cueball-results h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.hint.warning {
+  color: #d97706;
+  font-weight: 600;
 }
 
 .score-card {
