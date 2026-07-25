@@ -22,8 +22,8 @@ export function scoreCueMetrics(prePath: Point2D[], line: [Point2D, Point2D], ba
       isGood: straightnessScore >= 70,
       advice: `[${scoreLabel(straightnessScore)}] ${
         straightnessScore >= 70
-          ? "キュー先端がまっすぐ出ています。"
-          : "キュー先端の軌道が曲がっています。グリップを緩め、肘を支点にまっすぐ引き通すことを意識しましょう。"
+          ? "キューがまっすぐ出ています。"
+          : "キューの軌道が曲がっています。グリップを緩め、肘を支点にまっすぐ引き通すことを意識しましょう。"
       }`,
     },
     {
@@ -46,15 +46,15 @@ export function analyzeCueBall(frames: CueBallFrame[]): CueBallAnalysisResult | 
   let contactIndex = 0;
   let minDist = Infinity;
   frames.forEach((f, i) => {
-    const d = dist(f.cueTip, f.ball);
+    const d = dist(f.cueFar, f.ball);
     if (d < minDist) {
       minDist = d;
       contactIndex = i;
     }
   });
 
-  const cuePathAll = frames.map((f) => f.cueTip);
-  const cuePathPre = frames.slice(0, contactIndex + 1).map((f) => f.cueTip);
+  const cuePathAll = frames.map((f) => f.cueFar);
+  const cuePathPre = frames.slice(0, contactIndex + 1).map((f) => f.cueFar);
   const prePath = cuePathPre.length >= 4 ? cuePathPre : cuePathAll;
 
   const fittedLine = fitLineThrough(prePath);

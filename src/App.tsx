@@ -80,7 +80,7 @@ function App() {
 
   const [cbStage, setCbStage] = useState<CueBallStage>("idle");
   const [ballSeed, setBallSeed] = useState<Point2D | null>(null);
-  const [cueTipSeed, setCueTipSeed] = useState<Point2D | null>(null);
+  const [cueNearSeed, setCueNearSeed] = useState<Point2D | null>(null);
   const [cueBallFrames, setCueBallFrames] = useState<CueBallFrame[]>([]);
   const [cbProgress, setCbProgress] = useState(0);
   const [cbError, setCbError] = useState<string | null>(null);
@@ -410,13 +410,13 @@ function App() {
         if (displayedCueLine) drawLineHandles(ctx, displayedCueLine, canvas.width, canvas.height, "#F472B6");
       }
       if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
-        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, cbFrame.cueCenter, canvas.width, canvas.height);
+        drawCueBall(ctx, cbFrame.ball, cbFrame.cueNear, cbFrame.cueFar, canvas.width, canvas.height);
       }
       if ((cbStage === "seed-cue" || cbStage === "seed-center") && ballSeed) {
         drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
       }
-      if (cbStage === "seed-center" && cueTipSeed) {
-        drawSeedMarker(ctx, cueTipSeed, "#38BDF8", canvas.width, canvas.height);
+      if (cbStage === "seed-center" && cueNearSeed) {
+        drawSeedMarker(ctx, cueNearSeed, "#38BDF8", canvas.width, canvas.height);
       }
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -426,7 +426,7 @@ function App() {
     cueBallFrames,
     cbStage,
     ballSeed,
-    cueTipSeed,
+    cueNearSeed,
     analysis,
     cueBallAnalysis,
     showGuideLines,
@@ -438,7 +438,7 @@ function App() {
   function resetCueBall() {
     setCbStage("idle");
     setBallSeed(null);
-    setCueTipSeed(null);
+    setCueNearSeed(null);
     setCueBallFrames([]);
     setCbProgress(0);
     setCbError(null);
@@ -450,7 +450,7 @@ function App() {
     video.pause();
     video.currentTime = trimStart;
     setBallSeed(null);
-    setCueTipSeed(null);
+    setCueNearSeed(null);
     setCbError(null);
     setCbStage("seed-ball");
   }
@@ -468,16 +468,16 @@ function App() {
       setBallSeed(point);
       setCbStage("seed-cue");
     } else if (cbStage === "seed-cue") {
-      setCueTipSeed(point);
+      setCueNearSeed(point);
       setCbStage("seed-center");
     } else {
       runCueBallTracking(point);
     }
   }
 
-  async function runCueBallTracking(cueCenterPoint: Point2D) {
+  async function runCueBallTracking(cueFarPoint: Point2D) {
     const video = videoRef.current;
-    if (!video || !ballSeed || !cueTipSeed) return;
+    if (!video || !ballSeed || !cueNearSeed) return;
     setCbStage("tracking");
     setCbProgress(0);
     try {
@@ -486,8 +486,8 @@ function App() {
         trimStart,
         trimEnd,
         ballSeed,
-        cueTipSeed,
-        cueCenterPoint,
+        cueNearSeed,
+        cueFarPoint,
         setCbProgress
       );
       setCueBallFrames(result);
@@ -535,7 +535,7 @@ function App() {
   const avgConfidence =
     cueBallFrames.length > 0
       ? cueBallFrames.reduce(
-          (s, f) => s + Math.min(f.ballConfidence, f.cueConfidence, f.cueCenterConfidence),
+          (s, f) => s + Math.min(f.ballConfidence, f.cueNearConfidence, f.cueFarConfidence),
           0
         ) / cueBallFrames.length
       : 0;
@@ -636,9 +636,9 @@ function App() {
               </div>
               {seedingActive() && (
                 <div className="seed-banner">
-                  {cbStage === "seed-ball" && "① 手球（狙う球）の中心をタップ"}
-                  {cbStage === "seed-cue" && "② キューの先端をタップ"}
-                  {cbStage === "seed-center" && "③ キューの中心（先端より手前）をタップ"}
+                  {cbStage === "seed-ball" && "① 手玉（狙う球）の中心をタップ"}
+                  {cbStage === "seed-cue" && "② キューの中心の点①（手前側）をタップ"}
+                  {cbStage === "seed-center" && "③ キューの中心の点②（①より少し先）をタップ"}
                 </div>
               )}
               {lineEditMode && <div className="seed-banner">ハンドル（●）をドラッグしてラインを調整</div>}
@@ -780,7 +780,7 @@ function App() {
                     <span className="legend-swatch" style={{ background: "#F472B6" }} /> 理想の直線
                     {cueBallAnalysis && (
                       <>
-                        <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー先端の軌道
+                        <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー中心の軌道
                       </>
                     )}
                     ・ピンチ / ホイールで動画をズームできます
@@ -818,7 +818,7 @@ function App() {
                 <div className="cueball-controls">
                   {cbStage === "idle" && (
                     <button type="button" className="ghost-btn wide" onClick={startCueBallSeeding}>
-                      🎯 詳細解析（β）: キュー・ボールを検出
+                      🎯 キュー中心の解析（β）
                     </button>
                   )}
                   {(cbStage === "seed-ball" || cbStage === "seed-cue") && (
@@ -876,7 +876,7 @@ function App() {
                 {effectiveCueBallAnalysis ? (
                   <>
                     <div>
-                      <h3>キュー先端と理想ラインのズレ</h3>
+                      <h3>キュー中心の解析（理想ラインとのズレ）</h3>
                       <p className="hint legend">
                         線の色でズレの大きさを表します：
                         <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />ズレ小さい
@@ -902,7 +902,7 @@ function App() {
 
               {effectiveCueBallAnalysis && (
                 <div className="cueball-results">
-                  <h3>詳細解析（キュー・ボール, β）</h3>
+                  <h3>キュー中心の解析（β）</h3>
                   {avgConfidence < 0.4 && (
                     <p className="hint warning">
                       追跡の信頼度が低めです。照明やボールとキューの映り具合によって精度が変わります。参考程度にご覧ください。

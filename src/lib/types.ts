@@ -27,14 +27,18 @@ export interface StrokeAnalysisResult {
   scale: number;
 }
 
+// Both cue points are seeded from the near side of the shaft (close to the
+// grip hand), not the tip out by the ball — easier to tap accurately and less
+// likely to leave frame or blur during the swing. cueNear is tapped first
+// (closest to the hand), cueFar a little further along toward the ball.
 export interface CueBallFrame {
   timeMs: number;
   ball: Point2D;
-  cueTip: Point2D;
-  cueCenter: Point2D;
+  cueNear: Point2D;
+  cueFar: Point2D;
   ballConfidence: number;
-  cueConfidence: number;
-  cueCenterConfidence: number;
+  cueNearConfidence: number;
+  cueFarConfidence: number;
 }
 
 export interface CueBallAnalysisResult {

@@ -33,8 +33,8 @@ export async function trackCueBall(
   trimStart: number,
   trimEnd: number,
   ballSeedNorm: Point2D,
-  cueTipSeedNorm: Point2D,
-  cueCenterSeedNorm: Point2D,
+  cueNearSeedNorm: Point2D,
+  cueFarSeedNorm: Point2D,
   onProgress: (ratio: number) => void
 ): Promise<CueBallFrame[]> {
   const vw = video.videoWidth;
@@ -54,8 +54,8 @@ export async function trackCueBall(
   const step = duration / total;
 
   const ball = makeTracked(ballSeedNorm, w, h);
-  const cueTip = makeTracked(cueTipSeedNorm, w, h);
-  const cueCenter = makeTracked(cueCenterSeedNorm, w, h);
+  const cueNear = makeTracked(cueNearSeedNorm, w, h);
+  const cueFar = makeTracked(cueFarSeedNorm, w, h);
 
   const frames: CueBallFrame[] = [];
 
@@ -66,17 +66,17 @@ export async function trackCueBall(
     const gray = toGrayFrame(ctx.getImageData(0, 0, w, h));
 
     const ballConfidence = stepTracked(ball, gray);
-    const cueConfidence = stepTracked(cueTip, gray);
-    const cueCenterConfidence = stepTracked(cueCenter, gray);
+    const cueNearConfidence = stepTracked(cueNear, gray);
+    const cueFarConfidence = stepTracked(cueFar, gray);
 
     frames.push({
       timeMs: t * 1000,
       ball: { x: ball.pos.x / w, y: ball.pos.y / h },
-      cueTip: { x: cueTip.pos.x / w, y: cueTip.pos.y / h },
-      cueCenter: { x: cueCenter.pos.x / w, y: cueCenter.pos.y / h },
+      cueNear: { x: cueNear.pos.x / w, y: cueNear.pos.y / h },
+      cueFar: { x: cueFar.pos.x / w, y: cueFar.pos.y / h },
       ballConfidence,
-      cueConfidence,
-      cueCenterConfidence,
+      cueNearConfidence,
+      cueFarConfidence,
     });
 
     onProgress((i + 1) / (total + 1));
