@@ -173,6 +173,12 @@
   gap: 4px 6px;
 }
 
+.line-edit-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .legend-swatch {
   display: inline-block;
   width: 10px;

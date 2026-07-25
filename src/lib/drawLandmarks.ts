@@ -1,5 +1,6 @@
 import { DrawingUtils, PoseLandmarker } from "@mediapipe/tasks-vision";
-import type { Point2D } from "./types";
+import { armIndices } from "./landmarkIndices";
+import type { Handedness, Point2D } from "./types";
 
 export function drawPose(ctx: CanvasRenderingContext2D, points: Point2D[]) {
   const landmarks = points.map((p) => ({ x: p.x, y: p.y, z: 0, visibility: 1 }));
@@ -11,6 +12,36 @@ export function drawPose(ctx: CanvasRenderingContext2D, points: Point2D[]) {
   drawingUtils.drawLandmarks(landmarks, {
     color: "#FFD54A",
     radius: 3,
+  });
+}
+
+export function drawArmOnly(
+  ctx: CanvasRenderingContext2D,
+  points: Point2D[],
+  hand: Handedness,
+  width: number,
+  height: number
+) {
+  const { shoulder, elbow, wrist } = armIndices(hand);
+  const chain = [points[shoulder], points[elbow], points[wrist]];
+
+  ctx.strokeStyle = "#7CFC9A";
+  ctx.lineWidth = 4;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  chain.forEach((p, i) => {
+    const x = p.x * width;
+    const y = p.y * height;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = "#FFD54A";
+  chain.forEach((p) => {
+    ctx.beginPath();
+    ctx.arc(p.x * width, p.y * height, 6, 0, Math.PI * 2);
+    ctx.fill();
   });
 }
 
@@ -82,6 +113,28 @@ export function drawTrackOverlay(
     ctx.lineTo(bx, by);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+}
+
+export function drawLineHandles(
+  ctx: CanvasRenderingContext2D,
+  line: [Point2D, Point2D],
+  width: number,
+  height: number,
+  color: string
+) {
+  for (const p of line) {
+    const x = p.x * width;
+    const y = p.y * height;
+    ctx.fillStyle = "#0e2417";
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }
 
