@@ -4,18 +4,8 @@ import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
 import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
-import { armIndices } from "./lib/landmarkIndices";
-import { lineLength } from "./lib/mathUtils";
 import { trackCueBall } from "./lib/cueBallTrack";
-import {
-  drawArmOnly,
-  drawCueBall,
-  drawLineHandles,
-  drawPose,
-  drawSeedMarker,
-  drawTimeMarker,
-  drawTrackOverlay,
-} from "./lib/drawLandmarks";
+import { drawArmOnly, drawCueBall, drawLineHandles, drawPose, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
 
@@ -244,6 +234,14 @@ function App() {
     setStage("loaded");
   }
 
+  // Frame-advances the video to match a trim-slider handle being dragged.
+  function seekVideoTo(t: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    video.currentTime = t;
+  }
+
   function onLoadedMetadata() {
     const video = videoRef.current;
     if (!video) return;
@@ -315,17 +313,6 @@ function App() {
     return { ...cueBallAnalysis, metrics };
   }, [cueBallAnalysis, cueLineOverride]);
 
-  // Elapsed-time labels (seconds since the start of the scored range) paired 1:1 with
-  // analysis.wristPath / cueBallAnalysis.cuePath, plus the normalization scale each
-  // trajectory's deviation-from-line coloring should use (matches the scoring formula).
-  const wristTimes = useMemo(
-    () => trimmedFrames.map((f) => f.timeMs / 1000 - trimStart),
-    [trimmedFrames, trimStart]
-  );
-  const cueTimes = useMemo(() => cueBallFrames.map((f) => f.timeMs / 1000 - trimStart), [cueBallFrames, trimStart]);
-  const wristNormalizeBy = analysis?.scale ?? 0.2;
-  const cueNormalizeBy = displayedCueLine ? lineLength(displayedCueLine) : 1;
-
   // A fresh analysis (new trim/hand/angle/tracking run) invalidates any manual line edit.
   useEffect(() => {
     setWristLineOverride(null);
@@ -355,44 +342,24 @@ function App() {
         drawTrackOverlay(
           ctx,
           analysis.wristPath,
-          wristTimes,
           displayedWristLine,
           canvas.width,
           canvas.height,
-          "255, 213, 74",
-          "#F472B6",
-          wristNormalizeBy
+          "rgba(255, 213, 74, 0.6)",
+          "#F472B6"
         );
-        if (frame) {
-          const wristIdx = armIndices(hand).wrist;
-          const elapsed = frame.timeMs / 1000 - trimStart;
-          drawTimeMarker(
-            ctx,
-            frame.landmarks[wristIdx],
-            `${elapsed.toFixed(2)}s`,
-            canvas.width,
-            canvas.height,
-            "#FFD54A"
-          );
-        }
       }
       const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
       if (showGuideLines && cueBallAnalysis) {
         drawTrackOverlay(
           ctx,
           cueBallAnalysis.cuePath,
-          cueTimes,
           displayedCueLine,
           canvas.width,
           canvas.height,
-          "56, 189, 248",
-          "#F472B6",
-          cueNormalizeBy
+          "rgba(56, 189, 248, 0.6)",
+          "#F472B6"
         );
-        if (cbFrame) {
-          const elapsed = cbFrame.timeMs / 1000 - trimStart;
-          drawTimeMarker(ctx, cbFrame.cueTip, `${elapsed.toFixed(2)}s`, canvas.width, canvas.height, "#38BDF8");
-        }
       }
       if (lineEditMode) {
         if (displayedWristLine) drawLineHandles(ctx, displayedWristLine, canvas.width, canvas.height, "#F472B6");
@@ -421,11 +388,6 @@ function App() {
     lineEditMode,
     displayedWristLine,
     displayedCueLine,
-    trimStart,
-    wristTimes,
-    cueTimes,
-    wristNormalizeBy,
-    cueNormalizeBy,
   ]);
 
   function resetCueBall() {
@@ -627,7 +589,11 @@ function App() {
                     max={duration}
                     step={0.05}
                     value={trimStart}
-                    onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.1))}
+                    onChange={(e) => {
+                      const v = Math.min(Number(e.target.value), trimEnd - 0.1);
+                      setTrimStart(v);
+                      seekVideoTo(v);
+                    }}
                   />
                   <input
                     type="range"
@@ -635,7 +601,11 @@ function App() {
                     max={duration}
                     step={0.05}
                     value={trimEnd}
-                    onChange={(e) => setTrimEnd(Math.max(Number(e.target.value), trimStart + 0.1))}
+                    onChange={(e) => {
+                      const v = Math.max(Number(e.target.value), trimStart + 0.1);
+                      setTrimEnd(v);
+                      seekVideoTo(v);
+                    }}
                   />
                   <span className="trim-label">
                     {trimStart.toFixed(1)}s - {trimEnd.toFixed(1)}s
@@ -673,7 +643,11 @@ function App() {
                     max={processedRange.end}
                     step={0.05}
                     value={trimStart}
-                    onChange={(e) => setTrimStart(Math.min(Number(e.target.value), trimEnd - 0.1))}
+                    onChange={(e) => {
+                      const v = Math.min(Number(e.target.value), trimEnd - 0.1);
+                      setTrimStart(v);
+                      seekVideoTo(v);
+                    }}
                   />
                   <input
                     type="range"
@@ -681,7 +655,11 @@ function App() {
                     max={processedRange.end}
                     step={0.05}
                     value={trimEnd}
-                    onChange={(e) => setTrimEnd(Math.max(Number(e.target.value), trimStart + 0.1))}
+                    onChange={(e) => {
+                      const v = Math.max(Number(e.target.value), trimStart + 0.1);
+                      setTrimEnd(v);
+                      seekVideoTo(v);
+                    }}
                   />
                   <span className="trim-label">
                     {trimStart.toFixed(1)}s - {trimEnd.toFixed(1)}s
@@ -705,20 +683,14 @@ function App() {
                 </label>
                 {analysis && (
                   <p className="hint legend">
-                    <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道（薄い＝早い、濃い＝遅い）
+                    <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道
                     <span className="legend-swatch" style={{ background: "#F472B6" }} /> 理想の直線
                     {cueBallAnalysis && (
                       <>
                         <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー先端の軌道
                       </>
                     )}
-                  </p>
-                )}
-                {analysis && (
-                  <p className="hint legend">
-                    軌道上の小さな数字は経過秒数、大きい丸のマーカーは現在の再生位置です。軌道から理想ラインへの短い線は
-                    <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />緑＝ズレ小さい〜
-                    <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />赤＝ズレ大きい を表します。ピンチ / ホイールで動画をズームできます。
+                    ・ピンチ / ホイールで動画をズームできます
                   </p>
                 )}
                 {(displayedWristLine || displayedCueLine) && (
