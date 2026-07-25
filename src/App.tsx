@@ -63,7 +63,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [frames, setFrames] = useState<FrameLandmarks[]>([]);
   const [hand, setHand] = useState<Handedness>("right");
-  const [viewAngle, setViewAngle] = useState<ViewAngle>("side");
+  const [viewAngle, setViewAngle] = useState<ViewAngle>("front");
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [processedRange, setProcessedRange] = useState<{ start: number; end: number } | null>(null);
