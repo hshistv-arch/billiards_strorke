@@ -5,7 +5,7 @@ import { PathPlot } from "./components/PathPlot";
 import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
 import { trackCueBall } from "./lib/cueBallTrack";
-import { drawArmOnly, drawCueBall, drawLineHandles, drawPose, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
+import { drawCueBall, drawLineHandles, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
 
@@ -72,7 +72,6 @@ function App() {
   const [cbError, setCbError] = useState<string | null>(null);
 
   const [showGuideLines, setShowGuideLines] = useState(true);
-  const [armOnly, setArmOnly] = useState(false);
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, x: 0, y: 0 });
 
   const [lineEditMode, setLineEditMode] = useState(false);
@@ -313,16 +312,19 @@ function App() {
     return { ...cueBallAnalysis, metrics };
   }, [cueBallAnalysis, cueLineOverride]);
 
-  // A fresh analysis (new trim/hand/angle/tracking run) invalidates any manual line edit.
+  // A manually-edited ideal line stays put across evaluation-range (timeline) changes,
+  // since that's just narrowing/widening the scored window on the same footage. It only
+  // resets on a genuinely new processing run or a hand/angle change, since those change
+  // what's actually being measured.
   useEffect(() => {
     setWristLineOverride(null);
-  }, [analysis]);
+  }, [frames, hand, viewAngle]);
 
   useEffect(() => {
     setCueLineOverride(null);
-  }, [cueBallAnalysis]);
+  }, [cueBallFrames]);
 
-  // Continuously draw the skeleton, guide lines, and cue/ball overlay in sync with video playback/scrubbing.
+  // Continuously draw the guide lines and cue/ball overlay in sync with video playback/scrubbing.
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -333,11 +335,6 @@ function App() {
     function loop() {
       if (!video || !canvas || !ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const frame = nearestByTime(frames, video.currentTime * 1000);
-      if (frame) {
-        if (armOnly) drawArmOnly(ctx, frame.landmarks, hand, canvas.width, canvas.height);
-        else drawPose(ctx, frame.landmarks);
-      }
       if (showGuideLines && analysis) {
         drawTrackOverlay(
           ctx,
@@ -376,15 +373,12 @@ function App() {
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
   }, [
-    frames,
     cueBallFrames,
     cbStage,
     ballSeed,
     analysis,
     cueBallAnalysis,
     showGuideLines,
-    armOnly,
-    hand,
     lineEditMode,
     displayedWristLine,
     displayedCueLine,
@@ -676,10 +670,6 @@ function App() {
                     onChange={(e) => setShowGuideLines(e.target.checked)}
                   />
                   動画上に軌道・理想ラインを表示
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={armOnly} onChange={(e) => setArmOnly(e.target.checked)} />
-                  キューを持つ腕以外のポイントを非表示
                 </label>
                 {analysis && (
                   <p className="hint legend">
