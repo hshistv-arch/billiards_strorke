@@ -43,3 +43,18 @@ export interface CueBallAnalysisResult {
   ballPosition: Point2D;
   contactIndex: number;
 }
+
+export interface SavedMetric {
+  label: string;
+  score: number;
+}
+
+export interface SavedResult {
+  id: string;
+  savedAt: number;
+  hand: Handedness;
+  viewAngle: ViewAngle;
+  overallScore: number;
+  metrics: SavedMetric[];
+  cueBallMetrics?: SavedMetric[];
+}

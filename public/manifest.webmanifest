@@ -1,6 +1,6 @@
 {
-  "name": "ビリヤード ストローク解析",
-  "short_name": "ストローク解析",
+  "name": "ストローク解析君",
+  "short_name": "ストローク解析君",
   "description": "ビリヤードのストローク動画をAIが自動採点し、修正ポイントを教えてくれるアプリ",
   "start_url": "/",
   "display": "standalone",

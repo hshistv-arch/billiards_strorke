@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
+import { HistoryList } from "./components/HistoryList";
 import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
 import { trackCueBall } from "./lib/cueBallTrack";
 import { drawCueBall, drawLineHandles, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
-import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, ViewAngle } from "./lib/types";
+import { deleteResult, loadHistory, saveResult } from "./lib/history";
+import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, SavedResult, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
 type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "tracking" | "done" | "error";
@@ -77,6 +79,13 @@ function App() {
   const [lineEditMode, setLineEditMode] = useState(false);
   const [wristLineOverride, setWristLineOverride] = useState<[Point2D, Point2D] | null>(null);
   const [cueLineOverride, setCueLineOverride] = useState<[Point2D, Point2D] | null>(null);
+
+  const [history, setHistory] = useState<SavedResult[]>([]);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    setHistory(loadHistory());
+  }, []);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -435,6 +444,26 @@ function App() {
     }
   }
 
+  function handleSaveResult() {
+    if (!effectiveAnalysis) return;
+    const result: SavedResult = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      savedAt: Date.now(),
+      hand,
+      viewAngle,
+      overallScore: effectiveAnalysis.overallScore,
+      metrics: effectiveAnalysis.metrics.map((m) => ({ label: m.label, score: m.score })),
+      cueBallMetrics: effectiveCueBallAnalysis?.metrics.map((m) => ({ label: m.label, score: m.score })),
+    };
+    setHistory(saveResult(result));
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
+  }
+
+  function handleDeleteHistoryItem(id: string) {
+    setHistory(deleteResult(id));
+  }
+
   function reset() {
     setStage("idle");
     setVideoUrl(null);
@@ -475,7 +504,7 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🎱 ビリヤード ストローク解析</h1>
+        <h1>🎱 ストローク解析君</h1>
         <p className="subtitle">動画をアップロードすると、フォームの修正ポイントをAIが自動で採点します。</p>
       </header>
 
@@ -515,6 +544,8 @@ function App() {
           </p>
         </div>
       )}
+
+      {stage === "idle" && <HistoryList items={history} onDelete={handleDeleteHistoryItem} />}
 
       {stage !== "idle" && (
         <div className="workspace">
@@ -754,6 +785,13 @@ function App() {
                   <h2>総合スコア</h2>
                   <p className="hint">4つの観点からストロークを自動採点しています。</p>
                 </div>
+              </div>
+
+              <div className="save-result-row">
+                <button type="button" className="ghost-btn" onClick={handleSaveResult}>
+                  💾 この結果を保存
+                </button>
+                {savedFlash && <span className="save-flash">保存しました ✓</span>}
               </div>
 
               <div className="metrics-grid">
