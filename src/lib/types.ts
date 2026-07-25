@@ -31,8 +31,10 @@ export interface CueBallFrame {
   timeMs: number;
   ball: Point2D;
   cueTip: Point2D;
+  cueCenter: Point2D;
   ballConfidence: number;
   cueConfidence: number;
+  cueCenterConfidence: number;
 }
 
 export interface CueBallAnalysisResult {

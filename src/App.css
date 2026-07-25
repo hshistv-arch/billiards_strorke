@@ -237,6 +237,44 @@
   background: rgba(15, 23, 20, 0.9);
 }
 
+.custom-controls {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.play-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--felt);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.play-btn:hover {
+  filter: brightness(1.1);
+}
+
+.seek-slider {
+  flex: 1;
+}
+
+.time-label {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;

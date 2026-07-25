@@ -1,10 +1,19 @@
 import type { Point2D } from "./types";
 
-export function drawCueBall(ctx: CanvasRenderingContext2D, ball: Point2D, cueTip: Point2D, width: number, height: number) {
+export function drawCueBall(
+  ctx: CanvasRenderingContext2D,
+  ball: Point2D,
+  cueTip: Point2D,
+  cueCenter: Point2D,
+  width: number,
+  height: number
+) {
   const bx = ball.x * width;
   const by = ball.y * height;
   const cx = cueTip.x * width;
   const cy = cueTip.y * height;
+  const mx = cueCenter.x * width;
+  const my = cueCenter.y * height;
 
   ctx.strokeStyle = "#FF6B6B";
   ctx.lineWidth = 2;
@@ -12,12 +21,26 @@ export function drawCueBall(ctx: CanvasRenderingContext2D, ball: Point2D, cueTip
   ctx.arc(bx, by, Math.max(8, width * 0.015), 0, Math.PI * 2);
   ctx.stroke();
 
+  // The actual detected cue shaft (tip <-> center), extended a little past the
+  // center so the drawn segment reads as "the cue", not just a short tick mark.
+  const dx = cx - mx;
+  const dy = cy - my;
+  const ext = 0.3;
+  const ex = mx - dx * ext;
+  const ey = my - dy * ext;
+  ctx.strokeStyle = "#38BDF8";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(cx, cy);
+  ctx.stroke();
+
   ctx.fillStyle = "#38BDF8";
   ctx.beginPath();
   ctx.arc(cx, cy, 5, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(56, 189, 248, 0.6)";
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.5)";
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();

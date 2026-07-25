@@ -14,7 +14,7 @@ import { lineLength } from "./lib/mathUtils";
 import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, SavedResult, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
-type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "tracking" | "done" | "error";
+type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "seed-center" | "tracking" | "done" | "error";
 type ZoomState = { scale: number; x: number; y: number };
 
 const MIN_ZOOM = 1;
@@ -35,6 +35,13 @@ function touchDistance(touches: React.TouchList): number {
   const a = touches[0];
   const b = touches[1];
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function formatTime(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${rem.toString().padStart(2, "0")}`;
 }
 
 type LineKey = "wrist" | "cue";
@@ -60,6 +67,8 @@ function App() {
   const [stage, setStage] = useState<Stage>("idle");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
   const [progress, setProgress] = useState(0);
   const [frames, setFrames] = useState<FrameLandmarks[]>([]);
   const [hand, setHand] = useState<Handedness>("right");
@@ -71,6 +80,7 @@ function App() {
 
   const [cbStage, setCbStage] = useState<CueBallStage>("idle");
   const [ballSeed, setBallSeed] = useState<Point2D | null>(null);
+  const [cueTipSeed, setCueTipSeed] = useState<Point2D | null>(null);
   const [cueBallFrames, setCueBallFrames] = useState<CueBallFrame[]>([]);
   const [cbProgress, setCbProgress] = useState(0);
   const [cbError, setCbError] = useState<string | null>(null);
@@ -120,7 +130,7 @@ function App() {
   }
 
   function seedingActive() {
-    return cbStage === "seed-ball" || cbStage === "seed-cue";
+    return cbStage === "seed-ball" || cbStage === "seed-cue" || cbStage === "seed-center";
   }
 
   function toNormalizedPoint(clientX: number, clientY: number): Point2D {
@@ -252,6 +262,32 @@ function App() {
     video.currentTime = t;
   }
 
+  function togglePlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) video.play();
+    else video.pause();
+  }
+
+  // Custom controls live below the video (not overlaid on it) so they never
+  // sit on top of the person in frame; this keeps them in sync with the
+  // underlying <video> element regardless of what else drives playback/seeking.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onTimeUpdate = () => setPlaybackTime(video.currentTime);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("timeupdate", onTimeUpdate);
+    return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("timeupdate", onTimeUpdate);
+    };
+  }, [videoUrl]);
+
   function onLoadedMetadata() {
     const video = videoRef.current;
     if (!video) return;
@@ -374,10 +410,13 @@ function App() {
         if (displayedCueLine) drawLineHandles(ctx, displayedCueLine, canvas.width, canvas.height, "#F472B6");
       }
       if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
-        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, canvas.width, canvas.height);
+        drawCueBall(ctx, cbFrame.ball, cbFrame.cueTip, cbFrame.cueCenter, canvas.width, canvas.height);
       }
-      if (cbStage === "seed-cue" && ballSeed) {
+      if ((cbStage === "seed-cue" || cbStage === "seed-center") && ballSeed) {
         drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
+      }
+      if (cbStage === "seed-center" && cueTipSeed) {
+        drawSeedMarker(ctx, cueTipSeed, "#38BDF8", canvas.width, canvas.height);
       }
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -387,6 +426,7 @@ function App() {
     cueBallFrames,
     cbStage,
     ballSeed,
+    cueTipSeed,
     analysis,
     cueBallAnalysis,
     showGuideLines,
@@ -398,6 +438,7 @@ function App() {
   function resetCueBall() {
     setCbStage("idle");
     setBallSeed(null);
+    setCueTipSeed(null);
     setCueBallFrames([]);
     setCbProgress(0);
     setCbError(null);
@@ -409,12 +450,13 @@ function App() {
     video.pause();
     video.currentTime = trimStart;
     setBallSeed(null);
+    setCueTipSeed(null);
     setCbError(null);
     setCbStage("seed-ball");
   }
 
   function handleStageClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (cbStage !== "seed-ball" && cbStage !== "seed-cue") return;
+    if (!seedingActive()) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -425,23 +467,34 @@ function App() {
     if (cbStage === "seed-ball") {
       setBallSeed(point);
       setCbStage("seed-cue");
+    } else if (cbStage === "seed-cue") {
+      setCueTipSeed(point);
+      setCbStage("seed-center");
     } else {
       runCueBallTracking(point);
     }
   }
 
-  async function runCueBallTracking(cueSeedPoint: Point2D) {
+  async function runCueBallTracking(cueCenterPoint: Point2D) {
     const video = videoRef.current;
-    if (!video || !ballSeed) return;
+    if (!video || !ballSeed || !cueTipSeed) return;
     setCbStage("tracking");
     setCbProgress(0);
     try {
-      const result = await trackCueBall(video, trimStart, trimEnd, ballSeed, cueSeedPoint, setCbProgress);
+      const result = await trackCueBall(
+        video,
+        trimStart,
+        trimEnd,
+        ballSeed,
+        cueTipSeed,
+        cueCenterPoint,
+        setCbProgress
+      );
       setCueBallFrames(result);
       setCbStage("done");
     } catch (e) {
       console.error(e);
-      setCbError("キュー・ボールの追跡に失敗しました。ボールとキュー先端がはっきり映っている動画でお試しください。");
+      setCbError("キュー・ボールの追跡に失敗しました。ボールとキューがはっきり映っている動画でお試しください。");
       setCbStage("error");
     }
   }
@@ -481,7 +534,10 @@ function App() {
 
   const avgConfidence =
     cueBallFrames.length > 0
-      ? cueBallFrames.reduce((s, f) => s + Math.min(f.ballConfidence, f.cueConfidence), 0) / cueBallFrames.length
+      ? cueBallFrames.reduce(
+          (s, f) => s + Math.min(f.ballConfidence, f.cueConfidence, f.cueCenterConfidence),
+          0
+        ) / cueBallFrames.length
       : 0;
 
   const handAngleSelectors = (
@@ -571,13 +627,7 @@ function App() {
                   cursor: lineEditMode ? "crosshair" : zoom.scale > 1 && !seedingActive() ? "grab" : "default",
                 }}
               >
-                <video
-                  ref={videoRef}
-                  src={videoUrl ?? undefined}
-                  controls
-                  playsInline
-                  onLoadedMetadata={onLoadedMetadata}
-                />
+                <video ref={videoRef} src={videoUrl ?? undefined} playsInline onLoadedMetadata={onLoadedMetadata} />
                 <canvas
                   ref={canvasRef}
                   className={`overlay ${seedingActive() || lineEditMode ? "overlay-clickable" : ""}`}
@@ -586,7 +636,9 @@ function App() {
               </div>
               {seedingActive() && (
                 <div className="seed-banner">
-                  {cbStage === "seed-ball" ? "① 手球（狙う球）の中心をタップ" : "② キューの先端をタップ"}
+                  {cbStage === "seed-ball" && "① 手球（狙う球）の中心をタップ"}
+                  {cbStage === "seed-cue" && "② キューの先端をタップ"}
+                  {cbStage === "seed-center" && "③ キューの中心（先端より手前）をタップ"}
                 </div>
               )}
               {lineEditMode && <div className="seed-banner">ハンドル（●）をドラッグしてラインを調整</div>}
@@ -603,6 +655,24 @@ function App() {
                   </button>
                 )}
               </div>
+            </div>
+
+            <div className="custom-controls">
+              <button type="button" className="play-btn" onClick={togglePlay} aria-label={isPlaying ? "一時停止" : "再生"}>
+                {isPlaying ? "⏸" : "▶"}
+              </button>
+              <input
+                type="range"
+                className="seek-slider"
+                min={0}
+                max={duration || 0}
+                step={0.01}
+                value={playbackTime}
+                onChange={(e) => seekVideoTo(Number(e.target.value))}
+              />
+              <span className="time-label">
+                {formatTime(playbackTime)} / {formatTime(duration)}
+              </span>
             </div>
 
             {stage === "loaded" && (
@@ -803,13 +873,31 @@ function App() {
               </div>
 
               <div className="path-section">
-                <div>
-                  <h3>手首の軌道</h3>
-                  <p className="hint">
-                    点が薄い→濃いの順で時間経過を表します。動画上のマーカーの秒数が、今の再生位置に対応するタイミングです。
-                  </p>
-                </div>
-                <PathPlot points={effectiveAnalysis.wristPath} line={displayedWristLine} />
+                {effectiveCueBallAnalysis ? (
+                  <>
+                    <div>
+                      <h3>キュー先端と理想ラインのズレ</h3>
+                      <p className="hint legend">
+                        線の色でズレの大きさを表します：
+                        <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />ズレ小さい
+                        <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />ズレ大きい
+                      </p>
+                    </div>
+                    <DeviationPlot
+                      points={effectiveCueBallAnalysis.prePath}
+                      line={displayedCueLine}
+                      normalizeBy={displayedCueLine ? lineLength(displayedCueLine) : 1}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <h3>手首の軌道</h3>
+                      <p className="hint">点が薄い→濃いの順で時間経過を表します。</p>
+                    </div>
+                    <PathPlot points={effectiveAnalysis.wristPath} line={displayedWristLine} />
+                  </>
+                )}
               </div>
 
               {effectiveCueBallAnalysis && (
@@ -824,21 +912,6 @@ function App() {
                     {effectiveCueBallAnalysis.metrics.map((m) => (
                       <ScoreCard key={m.key} metric={m} />
                     ))}
-                  </div>
-                  <div className="path-section">
-                    <div>
-                      <h3>キュー先端と理想ラインのズレ</h3>
-                      <p className="hint legend">
-                        線の色でズレの大きさを表します：
-                        <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />ズレ小さい
-                        <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />ズレ大きい
-                      </p>
-                    </div>
-                    <DeviationPlot
-                      points={effectiveCueBallAnalysis.prePath}
-                      line={displayedCueLine}
-                      normalizeBy={displayedCueLine ? lineLength(displayedCueLine) : 1}
-                    />
                   </div>
                 </div>
               )}

@@ -8,12 +8,33 @@ const SEARCH_HALF = 18;
 const TARGET_FPS = 20;
 const MAX_SAMPLES = 240;
 
+interface TrackedPoint {
+  template: Template | null;
+  pos: { x: number; y: number };
+}
+
+function makeTracked(seedNorm: Point2D, w: number, h: number): TrackedPoint {
+  return { template: null, pos: { x: seedNorm.x * w, y: seedNorm.y * h } };
+}
+
+function stepTracked(point: TrackedPoint, gray: ReturnType<typeof toGrayFrame>): number {
+  if (!point.template) {
+    point.template = captureTemplate(gray, point.pos.x, point.pos.y, PATCH_HALF);
+  }
+  if (!point.template) return 0;
+  const result = trackTemplate(gray, point.template, point.pos.x, point.pos.y, SEARCH_HALF);
+  if (!result) return 0;
+  point.pos = { x: result.x, y: result.y };
+  return result.confidence;
+}
+
 export async function trackCueBall(
   video: HTMLVideoElement,
   trimStart: number,
   trimEnd: number,
   ballSeedNorm: Point2D,
-  cueSeedNorm: Point2D,
+  cueTipSeedNorm: Point2D,
+  cueCenterSeedNorm: Point2D,
   onProgress: (ratio: number) => void
 ): Promise<CueBallFrame[]> {
   const vw = video.videoWidth;
@@ -32,10 +53,9 @@ export async function trackCueBall(
   const total = Math.max(1, Math.min(MAX_SAMPLES, Math.floor(duration * TARGET_FPS)));
   const step = duration / total;
 
-  let ballTemplate: Template | null = null;
-  let cueTemplate: Template | null = null;
-  let ballPos = { x: ballSeedNorm.x * w, y: ballSeedNorm.y * h };
-  let cuePos = { x: cueSeedNorm.x * w, y: cueSeedNorm.y * h };
+  const ball = makeTracked(ballSeedNorm, w, h);
+  const cueTip = makeTracked(cueTipSeedNorm, w, h);
+  const cueCenter = makeTracked(cueCenterSeedNorm, w, h);
 
   const frames: CueBallFrame[] = [];
 
@@ -43,36 +63,20 @@ export async function trackCueBall(
     const t = Math.min(trimEnd - 0.001, trimStart + i * step);
     await seekTo(video, t);
     ctx.drawImage(video, 0, 0, w, h);
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const gray = toGrayFrame(imageData);
+    const gray = toGrayFrame(ctx.getImageData(0, 0, w, h));
 
-    if (!ballTemplate) ballTemplate = captureTemplate(gray, ballPos.x, ballPos.y, PATCH_HALF);
-    if (!cueTemplate) cueTemplate = captureTemplate(gray, cuePos.x, cuePos.y, PATCH_HALF);
-
-    let ballConfidence = 0;
-    let cueConfidence = 0;
-
-    if (ballTemplate) {
-      const result = trackTemplate(gray, ballTemplate, ballPos.x, ballPos.y, SEARCH_HALF);
-      if (result) {
-        ballPos = { x: result.x, y: result.y };
-        ballConfidence = result.confidence;
-      }
-    }
-    if (cueTemplate) {
-      const result = trackTemplate(gray, cueTemplate, cuePos.x, cuePos.y, SEARCH_HALF);
-      if (result) {
-        cuePos = { x: result.x, y: result.y };
-        cueConfidence = result.confidence;
-      }
-    }
+    const ballConfidence = stepTracked(ball, gray);
+    const cueConfidence = stepTracked(cueTip, gray);
+    const cueCenterConfidence = stepTracked(cueCenter, gray);
 
     frames.push({
       timeMs: t * 1000,
-      ball: { x: ballPos.x / w, y: ballPos.y / h },
-      cueTip: { x: cuePos.x / w, y: cuePos.y / h },
+      ball: { x: ball.pos.x / w, y: ball.pos.y / h },
+      cueTip: { x: cueTip.pos.x / w, y: cueTip.pos.y / h },
+      cueCenter: { x: cueCenter.pos.x / w, y: cueCenter.pos.y / h },
       ballConfidence,
       cueConfidence,
+      cueCenterConfidence,
     });
 
     onProgress((i + 1) / (total + 1));
