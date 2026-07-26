@@ -393,7 +393,7 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>🎱 ストローク解析君</h1>
+        <h1>🎱 綺麗なストローク作る君</h1>
         <p className="subtitle">動画をアップロードすると、フォームの修正ポイントをAIが自動で採点します。</p>
       </header>
 
