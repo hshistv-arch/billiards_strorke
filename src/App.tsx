@@ -2,19 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { ScoreCard } from "./components/ScoreCard";
 import { PathPlot } from "./components/PathPlot";
-import { DeviationPlot } from "./components/DeviationPlot";
 import { HistoryList } from "./components/HistoryList";
-import { analyzeCueBall, scoreCueMetrics } from "./lib/analyzeCueBall";
 import { analyzeStroke, scoreWristStraightness } from "./lib/analyzeStroke";
-import { trackCueBall } from "./lib/cueBallTrack";
-import { drawCueBall, drawLineHandles, drawSeedMarker, drawTrackOverlay } from "./lib/drawLandmarks";
+import { drawLineHandles, drawTrackOverlay } from "./lib/drawLandmarks";
 import { extractFrames } from "./lib/extractFrames";
-import { deleteResult, loadHistory, saveResult } from "./lib/history";
-import { lineLength } from "./lib/mathUtils";
-import type { CueBallFrame, FrameLandmarks, Handedness, Point2D, SavedResult, ViewAngle } from "./lib/types";
+import { deleteResult, loadHistory, saveResult, updateResult } from "./lib/history";
+import type { FrameLandmarks, Handedness, Point2D, SavedResult, ViewAngle } from "./lib/types";
 
 type Stage = "idle" | "loaded" | "processing" | "ready";
-type CueBallStage = "idle" | "seed-ball" | "seed-cue" | "seed-center" | "tracking" | "done" | "error";
 type ZoomState = { scale: number; x: number; y: number };
 
 const MIN_ZOOM = 1;
@@ -44,24 +39,10 @@ function formatTime(seconds: number): string {
   return `${m}:${rem.toString().padStart(2, "0")}`;
 }
 
-type LineKey = "wrist" | "cue";
-type LineHandle = { line: LineKey; endpoint: 0 | 1 };
+// The ideal-line editor only ever has one line (the wrist trajectory fit) now
+// that cue tracking has been removed, so a handle is just "which endpoint".
+type LineEndpoint = 0 | 1;
 const HANDLE_HIT_RADIUS = 0.05;
-
-function nearestByTime<T extends { timeMs: number }>(items: T[], timeMs: number): T | null {
-  if (items.length === 0) return null;
-  let lo = 0;
-  let hi = items.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (items[mid].timeMs < timeMs) lo = mid + 1;
-    else hi = mid;
-  }
-  if (lo > 0 && Math.abs(items[lo - 1].timeMs - timeMs) < Math.abs(items[lo].timeMs - timeMs)) {
-    return items[lo - 1];
-  }
-  return items[lo];
-}
 
 function App() {
   const [stage, setStage] = useState<Stage>("idle");
@@ -78,19 +59,11 @@ function App() {
   const [processedRange, setProcessedRange] = useState<{ start: number; end: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [cbStage, setCbStage] = useState<CueBallStage>("idle");
-  const [ballSeed, setBallSeed] = useState<Point2D | null>(null);
-  const [cueNearSeed, setCueNearSeed] = useState<Point2D | null>(null);
-  const [cueBallFrames, setCueBallFrames] = useState<CueBallFrame[]>([]);
-  const [cbProgress, setCbProgress] = useState(0);
-  const [cbError, setCbError] = useState<string | null>(null);
-
   const [showGuideLines, setShowGuideLines] = useState(true);
   const [zoom, setZoom] = useState<ZoomState>({ scale: 1, x: 0, y: 0 });
 
   const [lineEditMode, setLineEditMode] = useState(false);
   const [wristLineOverride, setWristLineOverride] = useState<[Point2D, Point2D] | null>(null);
-  const [cueLineOverride, setCueLineOverride] = useState<[Point2D, Point2D] | null>(null);
 
   const [history, setHistory] = useState<SavedResult[]>([]);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -107,7 +80,7 @@ function App() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const dragStateRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const pinchStateRef = useRef<{ startDist: number; startScale: number } | null>(null);
-  const dragHandleRef = useRef<LineHandle | null>(null);
+  const dragHandleRef = useRef<LineEndpoint | null>(null);
 
   function updateZoom(updater: (z: ZoomState) => ZoomState) {
     setZoom((z) => {
@@ -129,10 +102,6 @@ function App() {
     updateZoom((z) => ({ ...z, scale: z.scale * factor }));
   }
 
-  function seedingActive() {
-    return cbStage === "seed-ball" || cbStage === "seed-cue" || cbStage === "seed-center";
-  }
-
   function toNormalizedPoint(clientX: number, clientY: number): Point2D {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -140,35 +109,25 @@ function App() {
     return { x: (clientX - rect.left) / rect.width, y: (clientY - rect.top) / rect.height };
   }
 
-  function nearestHandle(p: Point2D): LineHandle | null {
-    const candidates: { handle: LineHandle; pt: Point2D }[] = [];
-    if (displayedWristLine) {
-      candidates.push({ handle: { line: "wrist", endpoint: 0 }, pt: displayedWristLine[0] });
-      candidates.push({ handle: { line: "wrist", endpoint: 1 }, pt: displayedWristLine[1] });
-    }
-    if (displayedCueLine) {
-      candidates.push({ handle: { line: "cue", endpoint: 0 }, pt: displayedCueLine[0] });
-      candidates.push({ handle: { line: "cue", endpoint: 1 }, pt: displayedCueLine[1] });
-    }
-    let best: LineHandle | null = null;
+  function nearestHandle(p: Point2D): LineEndpoint | null {
+    if (!displayedWristLine) return null;
+    let best: LineEndpoint | null = null;
     let bestDist = HANDLE_HIT_RADIUS;
-    for (const c of candidates) {
-      const d = Math.hypot(c.pt.x - p.x, c.pt.y - p.y);
+    (displayedWristLine as [Point2D, Point2D]).forEach((pt, i) => {
+      const d = Math.hypot(pt.x - p.x, pt.y - p.y);
       if (d < bestDist) {
         bestDist = d;
-        best = c.handle;
+        best = i as LineEndpoint;
       }
-    }
+    });
     return best;
   }
 
-  function moveHandle(handle: LineHandle, p: Point2D) {
-    const setter = handle.line === "wrist" ? setWristLineOverride : setCueLineOverride;
-    const base = handle.line === "wrist" ? displayedWristLine : displayedCueLine;
-    setter((prev) => {
-      const current = prev ?? base ?? [p, p];
+  function moveHandle(endpoint: LineEndpoint, p: Point2D) {
+    setWristLineOverride((prev) => {
+      const current = prev ?? displayedWristLine ?? [p, p];
       const next: [Point2D, Point2D] = [current[0], current[1]];
-      next[handle.endpoint] = p;
+      next[endpoint] = p;
       return next;
     });
   }
@@ -177,13 +136,13 @@ function App() {
     if (lineEditMode) {
       const p = toNormalizedPoint(clientX, clientY);
       const handle = nearestHandle(p);
-      if (handle) {
+      if (handle !== null) {
         dragHandleRef.current = handle;
         return true;
       }
       return false;
     }
-    if (zoom.scale > 1 && !seedingActive()) {
+    if (zoom.scale > 1) {
       dragStateRef.current = { startX: clientX, startY: clientY, origX: zoom.x, origY: zoom.y };
       return true;
     }
@@ -191,7 +150,7 @@ function App() {
   }
 
   function movePointerInteraction(clientX: number, clientY: number) {
-    if (dragHandleRef.current) {
+    if (dragHandleRef.current !== null) {
       moveHandle(dragHandleRef.current, toNormalizedPoint(clientX, clientY));
       return;
     }
@@ -216,7 +175,7 @@ function App() {
       const dist = touchDistance(e.touches);
       const scale = pinchStateRef.current.startScale * (dist / pinchStateRef.current.startDist);
       updateZoom((z) => ({ ...z, scale }));
-    } else if (e.touches.length === 1 && (dragHandleRef.current || dragStateRef.current)) {
+    } else if (e.touches.length === 1 && (dragHandleRef.current !== null || dragStateRef.current)) {
       e.preventDefault();
       movePointerInteraction(e.touches[0].clientX, e.touches[0].clientY);
     }
@@ -246,7 +205,6 @@ function App() {
     setFrames([]);
     setProgress(0);
     setProcessedRange(null);
-    resetCueBall();
     resetZoom();
     setLineEditMode(false);
     const url = URL.createObjectURL(file);
@@ -335,13 +293,7 @@ function App() {
     return analyzeStroke(trimmedFrames, hand, viewAngle);
   }, [trimmedFrames, hand, viewAngle, stage]);
 
-  const cueBallAnalysis = useMemo(() => {
-    if (cbStage !== "done") return null;
-    return analyzeCueBall(cueBallFrames);
-  }, [cueBallFrames, cbStage]);
-
   const displayedWristLine = wristLineOverride ?? analysis?.fittedLine ?? null;
-  const displayedCueLine = cueLineOverride ?? cueBallAnalysis?.fittedLine ?? null;
 
   // When the ideal line is manually edited, rescore against the edited line instead
   // of the auto-fit one, so the score card always matches what's drawn on screen.
@@ -353,12 +305,6 @@ function App() {
     return { ...analysis, metrics, overallScore };
   }, [analysis, wristLineOverride, viewAngle]);
 
-  const effectiveCueBallAnalysis = useMemo(() => {
-    if (!cueBallAnalysis || !cueLineOverride) return cueBallAnalysis;
-    const metrics = scoreCueMetrics(cueBallAnalysis.prePath, cueLineOverride, cueBallAnalysis.ballPosition);
-    return { ...cueBallAnalysis, metrics };
-  }, [cueBallAnalysis, cueLineOverride]);
-
   // A manually-edited ideal line stays put across evaluation-range (timeline) changes,
   // since that's just narrowing/widening the scored window on the same footage. It only
   // resets on a genuinely new processing run or a hand/angle change, since those change
@@ -367,11 +313,7 @@ function App() {
     setWristLineOverride(null);
   }, [frames, hand, viewAngle]);
 
-  useEffect(() => {
-    setCueLineOverride(null);
-  }, [cueBallFrames]);
-
-  // Continuously draw the guide lines and cue/ball overlay in sync with video playback/scrubbing.
+  // Continuously draw the wrist trajectory + ideal line in sync with video playback/scrubbing.
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -383,121 +325,16 @@ function App() {
       if (!video || !canvas || !ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (showGuideLines && analysis) {
-        drawTrackOverlay(
-          ctx,
-          analysis.wristPath,
-          displayedWristLine,
-          canvas.width,
-          canvas.height,
-          "rgba(255, 213, 74, 0.6)",
-          "#F472B6"
-        );
+        drawTrackOverlay(ctx, analysis.wristPath, displayedWristLine, canvas.width, canvas.height, "255, 213, 74", "#F472B6");
       }
-      const cbFrame = nearestByTime(cueBallFrames, video.currentTime * 1000);
-      if (showGuideLines && cueBallAnalysis) {
-        drawTrackOverlay(
-          ctx,
-          cueBallAnalysis.cuePath,
-          displayedCueLine,
-          canvas.width,
-          canvas.height,
-          "rgba(56, 189, 248, 0.6)",
-          "#F472B6"
-        );
-      }
-      if (lineEditMode) {
-        if (displayedWristLine) drawLineHandles(ctx, displayedWristLine, canvas.width, canvas.height, "#F472B6");
-        if (displayedCueLine) drawLineHandles(ctx, displayedCueLine, canvas.width, canvas.height, "#F472B6");
-      }
-      if (cbFrame && (cbStage === "done" || cbStage === "tracking")) {
-        drawCueBall(ctx, cbFrame.ball, cbFrame.cueNear, cbFrame.cueFar, canvas.width, canvas.height);
-      }
-      if ((cbStage === "seed-cue" || cbStage === "seed-center") && ballSeed) {
-        drawSeedMarker(ctx, ballSeed, "#FF6B6B", canvas.width, canvas.height);
-      }
-      if (cbStage === "seed-center" && cueNearSeed) {
-        drawSeedMarker(ctx, cueNearSeed, "#38BDF8", canvas.width, canvas.height);
+      if (lineEditMode && displayedWristLine) {
+        drawLineHandles(ctx, displayedWristLine, canvas.width, canvas.height, "#F472B6");
       }
       rafRef.current = requestAnimationFrame(loop);
     }
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [
-    cueBallFrames,
-    cbStage,
-    ballSeed,
-    cueNearSeed,
-    analysis,
-    cueBallAnalysis,
-    showGuideLines,
-    lineEditMode,
-    displayedWristLine,
-    displayedCueLine,
-  ]);
-
-  function resetCueBall() {
-    setCbStage("idle");
-    setBallSeed(null);
-    setCueNearSeed(null);
-    setCueBallFrames([]);
-    setCbProgress(0);
-    setCbError(null);
-  }
-
-  function startCueBallSeeding() {
-    const video = videoRef.current;
-    if (!video) return;
-    video.pause();
-    video.currentTime = trimStart;
-    setBallSeed(null);
-    setCueNearSeed(null);
-    setCbError(null);
-    setCbStage("seed-ball");
-  }
-
-  function handleStageClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!seedingActive()) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const point: Point2D = {
-      x: (e.clientX - rect.left) / rect.width,
-      y: (e.clientY - rect.top) / rect.height,
-    };
-    if (cbStage === "seed-ball") {
-      setBallSeed(point);
-      setCbStage("seed-cue");
-    } else if (cbStage === "seed-cue") {
-      setCueNearSeed(point);
-      setCbStage("seed-center");
-    } else {
-      runCueBallTracking(point);
-    }
-  }
-
-  async function runCueBallTracking(cueFarPoint: Point2D) {
-    const video = videoRef.current;
-    if (!video || !ballSeed || !cueNearSeed) return;
-    setCbStage("tracking");
-    setCbProgress(0);
-    try {
-      const result = await trackCueBall(
-        video,
-        trimStart,
-        trimEnd,
-        ballSeed,
-        cueNearSeed,
-        cueFarPoint,
-        setCbProgress
-      );
-      setCueBallFrames(result);
-      setCbStage("done");
-    } catch (e) {
-      console.error(e);
-      setCbError("キュー・ボールの追跡に失敗しました。ボールとキューがはっきり映っている動画でお試しください。");
-      setCbStage("error");
-    }
-  }
+  }, [analysis, showGuideLines, lineEditMode, displayedWristLine]);
 
   function handleSaveResult() {
     if (!effectiveAnalysis) return;
@@ -508,7 +345,6 @@ function App() {
       viewAngle,
       overallScore: effectiveAnalysis.overallScore,
       metrics: effectiveAnalysis.metrics.map((m) => ({ label: m.label, score: m.score })),
-      cueBallMetrics: effectiveCueBallAnalysis?.metrics.map((m) => ({ label: m.label, score: m.score })),
     };
     setHistory(saveResult(result));
     setSavedFlash(true);
@@ -519,6 +355,10 @@ function App() {
     setHistory(deleteResult(id));
   }
 
+  function handleUpdateHistoryItem(id: string, patch: Partial<SavedResult>) {
+    setHistory(updateResult(id, patch));
+  }
+
   function reset() {
     setStage("idle");
     setVideoUrl(null);
@@ -526,19 +366,10 @@ function App() {
     setProgress(0);
     setProcessedRange(null);
     setError(null);
-    resetCueBall();
     resetZoom();
     setLineEditMode(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
-
-  const avgConfidence =
-    cueBallFrames.length > 0
-      ? cueBallFrames.reduce(
-          (s, f) => s + Math.min(f.ballConfidence, f.cueNearConfidence, f.cueFarConfidence),
-          0
-        ) / cueBallFrames.length
-      : 0;
 
   const handAngleSelectors = (
     <>
@@ -603,7 +434,9 @@ function App() {
         </div>
       )}
 
-      {stage === "idle" && <HistoryList items={history} onDelete={handleDeleteHistoryItem} />}
+      {stage === "idle" && (
+        <HistoryList items={history} onDelete={handleDeleteHistoryItem} onUpdate={handleUpdateHistoryItem} />
+      )}
 
       {stage !== "idle" && (
         <div className="workspace">
@@ -624,23 +457,12 @@ function App() {
                 className="zoom-wrapper"
                 style={{
                   transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-                  cursor: lineEditMode ? "crosshair" : zoom.scale > 1 && !seedingActive() ? "grab" : "default",
+                  cursor: lineEditMode ? "crosshair" : zoom.scale > 1 ? "grab" : "default",
                 }}
               >
                 <video ref={videoRef} src={videoUrl ?? undefined} playsInline onLoadedMetadata={onLoadedMetadata} />
-                <canvas
-                  ref={canvasRef}
-                  className={`overlay ${seedingActive() || lineEditMode ? "overlay-clickable" : ""}`}
-                  onClick={handleStageClick}
-                />
+                <canvas ref={canvasRef} className={`overlay ${lineEditMode ? "overlay-clickable" : ""}`} />
               </div>
-              {seedingActive() && (
-                <div className="seed-banner">
-                  {cbStage === "seed-ball" && "① 手玉（狙う球）の中心をタップ"}
-                  {cbStage === "seed-cue" && "② キューの中心の点①（手前側）をタップ"}
-                  {cbStage === "seed-center" && "③ キューの中心の点②（①より少し先）をタップ"}
-                </div>
-              )}
               {lineEditMode && <div className="seed-banner">ハンドル（●）をドラッグしてラインを調整</div>}
               <div className="zoom-controls">
                 <button type="button" onClick={() => updateZoom((z) => ({ ...z, scale: z.scale * 1.4 }))}>
@@ -772,21 +594,16 @@ function App() {
                     checked={showGuideLines}
                     onChange={(e) => setShowGuideLines(e.target.checked)}
                   />
-                  動画上に軌道・理想ラインを表示
+                  動画上に手首の軌道ポイント・理想ラインを表示
                 </label>
                 {analysis && (
                   <p className="hint legend">
                     <span className="legend-swatch" style={{ background: "#FFD54A" }} /> 実際の軌道
                     <span className="legend-swatch" style={{ background: "#F472B6" }} /> 理想の直線
-                    {cueBallAnalysis && (
-                      <>
-                        <span className="legend-swatch" style={{ background: "#38BDF8" }} /> キュー中心の軌道
-                      </>
-                    )}
                     ・ピンチ / ホイールで動画をズームできます
                   </p>
                 )}
-                {(displayedWristLine || displayedCueLine) && (
+                {displayedWristLine && (
                   <div className="line-edit-row">
                     <button
                       type="button"
@@ -795,15 +612,8 @@ function App() {
                     >
                       {lineEditMode ? "✅ ラインの編集を終える" : "✏️ 理想ラインを編集"}
                     </button>
-                    {(wristLineOverride || cueLineOverride) && (
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => {
-                          setWristLineOverride(null);
-                          setCueLineOverride(null);
-                        }}
-                      >
+                    {wristLineOverride && (
+                      <button type="button" className="ghost-btn" onClick={() => setWristLineOverride(null)}>
                         ↺ 自動計算に戻す
                       </button>
                     )}
@@ -811,34 +621,9 @@ function App() {
                 )}
                 {lineEditMode && (
                   <p className="hint">
-                    ピンクのハンドル（●）をドラッグしてラインを調整できます。編集すると「直線性」「芯を捉えているか」のスコアもこのラインを基準に再計算されます。
+                    ピンクのハンドル（●）をドラッグしてラインを調整できます。編集すると「直線性」のスコアもこのラインを基準に再計算されます。
                   </p>
                 )}
-
-                <div className="cueball-controls">
-                  {cbStage === "idle" && (
-                    <button type="button" className="ghost-btn wide" onClick={startCueBallSeeding}>
-                      🎯 キュー中心の解析（β）
-                    </button>
-                  )}
-                  {(cbStage === "seed-ball" || cbStage === "seed-cue") && (
-                    <p className="hint">動画の上でタップして位置を指定してください。</p>
-                  )}
-                  {cbStage === "tracking" && (
-                    <div className="progress-wrap">
-                      <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${Math.round(cbProgress * 100)}%` }} />
-                      </div>
-                      <p>キュー・ボールを追跡しています… {Math.round(cbProgress * 100)}%</p>
-                    </div>
-                  )}
-                  {(cbStage === "done" || cbStage === "error") && (
-                    <button type="button" className="ghost-btn" onClick={resetCueBall}>
-                      詳細解析をやり直す
-                    </button>
-                  )}
-                  {cbError && <p className="error">{cbError}</p>}
-                </div>
 
                 <button type="button" className="ghost-btn" onClick={reset}>
                   別の動画を解析する
@@ -873,48 +658,12 @@ function App() {
               </div>
 
               <div className="path-section">
-                {effectiveCueBallAnalysis ? (
-                  <>
-                    <div>
-                      <h3>キュー中心の解析（理想ラインとのズレ）</h3>
-                      <p className="hint legend">
-                        線の色でズレの大きさを表します：
-                        <span className="legend-swatch" style={{ background: "rgb(74,222,128)" }} />ズレ小さい
-                        <span className="legend-swatch" style={{ background: "rgb(248,113,113)" }} />ズレ大きい
-                      </p>
-                    </div>
-                    <DeviationPlot
-                      points={effectiveCueBallAnalysis.prePath}
-                      line={displayedCueLine}
-                      normalizeBy={displayedCueLine ? lineLength(displayedCueLine) : 1}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <div>
-                      <h3>手首の軌道</h3>
-                      <p className="hint">点が薄い→濃いの順で時間経過を表します。</p>
-                    </div>
-                    <PathPlot points={effectiveAnalysis.wristPath} line={displayedWristLine} />
-                  </>
-                )}
-              </div>
-
-              {effectiveCueBallAnalysis && (
-                <div className="cueball-results">
-                  <h3>キュー中心の解析（β）</h3>
-                  {avgConfidence < 0.4 && (
-                    <p className="hint warning">
-                      追跡の信頼度が低めです。照明やボールとキューの映り具合によって精度が変わります。参考程度にご覧ください。
-                    </p>
-                  )}
-                  <div className="metrics-grid">
-                    {effectiveCueBallAnalysis.metrics.map((m) => (
-                      <ScoreCard key={m.key} metric={m} />
-                    ))}
-                  </div>
+                <div>
+                  <h3>手首の軌道</h3>
+                  <p className="hint">点が薄い→濃いの順で時間経過を表します。</p>
                 </div>
-              )}
+                <PathPlot points={effectiveAnalysis.wristPath} line={displayedWristLine} />
+              </div>
             </div>
           )}
         </div>

@@ -81,13 +81,16 @@
 }
 
 .history-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   background: var(--panel-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 10px 14px;
+}
+
+.history-item-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .history-score {
@@ -114,19 +117,65 @@
   text-align: left;
 }
 
-.history-delete {
+.history-delete,
+.history-edit {
   flex-shrink: 0;
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 16px;
-  padding: 6px;
+  font-size: 14px;
+  padding: 6px 8px;
   border-radius: 8px;
   line-height: 1;
 }
 
-.history-delete:hover {
+.history-delete:hover,
+.history-edit:hover {
   background: var(--code-bg);
+}
+
+.history-note-preview {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.history-edit-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.history-edit-fields {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-note-input {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+  min-height: 50px;
 }
 
 .save-result-row {
@@ -441,30 +490,6 @@
 .metrics-grid {
   display: grid;
   gap: 14px;
-}
-
-.cueball-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.cueball-results {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.cueball-results h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.hint.warning {
-  color: #d97706;
-  font-weight: 600;
 }
 
 .score-card {

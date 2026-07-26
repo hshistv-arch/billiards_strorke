@@ -34,3 +34,9 @@ export function deleteResult(id: string): SavedResult[] {
   persist(next);
   return next;
 }
+
+export function updateResult(id: string, patch: Partial<SavedResult>): SavedResult[] {
+  const next = loadHistory().map((r) => (r.id === id ? { ...r, ...patch } : r));
+  persist(next);
+  return next;
+}
